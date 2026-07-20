@@ -1,0 +1,34 @@
+# Rampart — Clippy configuration parameters
+# Lint levels (deny/warn/allow) are set in workspace Cargo.toml
+
+# --- Пороги ---
+too-many-arguments-threshold = 7
+type-complexity-threshold = 10
+cognitive-complexity-threshold = 25
+large-error-threshold = 64
+future-size-threshold = 10240
+enum-variant-size-threshold = 200
+array-size-threshold = 512
+stack-size-threshold = 512000
+literal-representation-threshold = 120
+
+# --- Разрешённое ---
+allow-expect-in-tests = true
+allow-unwrap-in-tests = true
+allow-dbg-in-tests = false
+allow-print-in-tests = false
+allow-panic-in-tests = false
+allow-one-hash-in-raw-strings = true
+
+# --- Именование ---
+min-ident-chars-threshold = 1
+single-char-binding-names-threshold = 3
+upper-case-acronyms-aggressive = false
+
+# --- Импорты ---
+enforced-import-renames = []
+absolute-paths-allowed-crates = ["crate", "self"]
+warn-on-all-wildcard-imports = true
+
+# --- MSRV ---
+msrv = "1.85"

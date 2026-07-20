@@ -1,0 +1,45 @@
+# Rust
+target/
+**/*.rs.bk
+Cargo.lock
+
+# Python
+__pycache__/
+*.py[cod]
+*.so
+venv/
+.venv/
+
+# Node
+node_modules/
+npm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Build
+*.o
+*.a
+*.dylib
+*.dll
+*.exe
+*.lib
+*.so
+*.d
+
+# Java / Gradle
+plugins/*/build/
+plugins/*/.gradle/
+*.jar
+!plugins/gradle/wrapper/gradle-wrapper.jar
+
+# Dashboard build
+dashboard/dist/
+dashboard/node_modules/

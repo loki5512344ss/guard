@@ -1,0 +1,12 @@
+bind = "0.0.0.0:25577"
+motd = "Rampart Test"
+online-mode = false
+show-max-players = 100
+player-info-forwarding-mode = "NONE"
+try-compressions-on-connect = false
+
+[servers]
+paper = "paper:25566"
+
+[forced-hosts]
+"play.example.com" = "paper"

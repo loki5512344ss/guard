@@ -1,0 +1,20 @@
+FROM eclipse-temurin:21-jre-bookworm
+
+ARG VELOCITY_VERSION=3.4.0-SNAPSHOT
+ARG VELOCITY_BUILD=latest
+
+RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*
+
+# Download Velocity
+RUN curl -fsSLo /opt/velocity.jar \
+    "https://api.papermc.io/v2/projects/velocity/versions/${VELOCITY_VERSION}/builds/${VELOCITY_BUILD}/downloads/velocity-${VELOCITY_VERSION}-${VELOCITY_BUILD}.jar" || \
+    curl -fsSLo /opt/velocity.jar \
+    "https://versions.velocitypowered.com/download/${VELOCITY_VERSION}.jar"
+
+COPY deploy/config/velocity.toml /opt/velocity.toml
+COPY plugins/velocity/build/libs/rampart-velocity-*.jar /opt/plugins/
+
+EXPOSE 25577
+
+WORKDIR /opt
+CMD ["java", "-jar", "/opt/velocity.jar", "/opt/velocity.toml"]

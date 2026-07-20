@@ -1,0 +1,22 @@
+FROM eclipse-temurin:21-jre-bookworm
+
+ARG PAPER_VERSION=1.21.4
+ARG PAPER_BUILD=latest
+
+RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*
+
+# Download Paper
+RUN curl -fsSLo /opt/paper.jar \
+    "https://api.papermc.io/v2/projects/paper/versions/${PAPER_VERSION}/builds/${PAPER_BUILD}/downloads/paper-${PAPER_VERSION}-${PAPER_BUILD}.jar" || \
+    echo "Falling back to direct download..." && \
+    curl -fsSLo /opt/paper.jar \
+    "https://papermc.io/api/v2/projects/paper/versions/${PAPER_VERSION}/builds/${PAPER_BUILD}/downloads/paper-${PAPER_VERSION}-${PAPER_BUILD}.jar"
+
+COPY deploy/config/server.properties /opt/server.properties
+COPY deploy/config/paper-global.yml /opt/paper-global.yml
+COPY plugins/paper/build/libs/rampart-paper-*.jar /opt/plugins/
+
+EXPOSE 25566
+
+WORKDIR /opt
+CMD ["java", "-jar", "/opt/paper.jar", "--nogui"]

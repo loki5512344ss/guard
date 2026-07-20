@@ -1,0 +1,42 @@
+[workspace]
+resolver = "2"
+members = ["crates/rampart-core", "crates/rampart-manager", "crates/rampart-cli"]
+
+[workspace.package]
+version = "0.2.0"
+edition = "2024"
+license = "GPL-3.0-only"
+authors = ["loki"]
+
+[workspace.lints.clippy]
+# Deny — критически важные для безопасности и стабильности
+type_complexity = "allow"
+unwrap_used = "deny"
+panic = "deny"
+dbg_macro = "deny"
+print_stdout = "deny"
+print_stderr = "deny"
+wildcard_imports = "deny"
+exit = "deny"
+# expect разрешён — используется в prometheus метриках при старте
+# cast разрешён — неизбежен в сетевом/MC протоколе
+
+[workspace.dependencies]
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
+thiserror = "2"
+anyhow = "1"
+dashmap = "6"
+crossbeam = "0.8"
+hex = "0.4"
+sha2 = "0.10"
+hmac = "0.12"
+subtle = "2"
+socket2 = "0.5"
+futures = "0.3"
+prometheus = { version = "0.14", features = ["process"] }
+toml = "0.8"
+clap = { version = "4", features = ["derive"] }

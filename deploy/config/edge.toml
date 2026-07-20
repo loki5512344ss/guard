@@ -1,0 +1,35 @@
+[bind]
+address = "0.0.0.0"
+port = 25565
+
+[backend]
+address = "velocity"
+port = 25577
+
+[hmac]
+secret = "test_secret_32_bytes_long_for_integration_test"
+
+[workers]
+count = 2
+
+[limits]
+handshake_timeout_secs = 5
+max_connections_per_ip = 10
+rate_limit_status_pps = 2
+rate_limit_login_pps = 5
+rate_limit_burst = 10
+
+[store]
+redis_url = "redis://redis:6379/0"
+blacklist_cache_ttl_secs = 300
+
+[logging]
+level = "debug"
+format = "text"
+
+[metrics]
+enabled = true
+port = 9090
+
+[xdp]
+enabled = false

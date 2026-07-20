@@ -1,0 +1,48 @@
+services:
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 1s
+      retries: 5
+
+  edge:
+    build:
+      context: ..
+      dockerfile: deploy/docker/Dockerfile.edge
+    ports:
+      - "25565:25565"
+    environment:
+      RAMPART_CONFIG: /etc/rampart/config.toml
+    volumes:
+      - ./config/edge.toml:/etc/rampart/config.toml:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  velocity:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile.velocity
+    environment:
+      RAMPART_HMAC_SECRET: test_secret_32_bytes_long_for_integration_test
+      RAMPART_ALLOWED_DOMAINS: play.example.com
+    ports:
+      - "25577:25577"
+    depends_on:
+      - paper
+
+  paper:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile.paper
+    environment:
+      EULA: "true"
+      RAMPART_HMAC_SECRET: test_secret_32_bytes_long_for_integration_test
+      RAMPART_ALLOWED_DOMAINS: play.example.com
+    ports:
+      - "25566:25566"
+    depends_on:
+      - redis
