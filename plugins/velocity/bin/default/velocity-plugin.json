@@ -1,1 +1,0 @@
-{"id":"rampart","name":"Rampart","version":"0.1.0","description":"HMAC hostname verification + domain whitelist + Redis server registry for Rampart","authors":["loki"],"dependencies":[],"main":"me.rampart.velocity.RampartVelocity"}

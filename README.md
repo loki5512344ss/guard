@@ -1,5 +1,13 @@
 <div align="center">
 
+> **⚠️ UNDER DEVELOPMENT** — All performance data, benchmarks, and specifications shown are approximate and subject to change.
+>
+> **⚠️ В РАЗРАБОТКЕ** — Все показатели производительности, тесты и характеристики являются примерными и могут измениться.
+
+</div>
+
+<div align="center">
+
 # Rampart
 
 Multi-layer DDoS protection for Minecraft servers.

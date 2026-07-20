@@ -37,9 +37,25 @@ Thumbs.db
 # Java / Gradle
 plugins/*/build/
 plugins/*/.gradle/
+plugins/*/bin/
+plugins/*/.classpath
+plugins/*/.project
+plugins/*/.settings/
+plugins/*/.factorypath
+plugins/.gradle/
+plugins/.project
+plugins/.settings/
+plugins/build/
 *.jar
 !plugins/gradle/wrapper/gradle-wrapper.jar
 
 # Dashboard build
 dashboard/dist/
 dashboard/node_modules/
+
+# Eclipse / IDE
+.classpath
+.project
+.settings/
+.factorypath
+bin/
