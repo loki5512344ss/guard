@@ -16,7 +16,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("cargo:rerun-if-changed={}", src.display());
 
-    let host_arch = std::env::var("HOST").unwrap_or_default();
+    let host_triple = std::env::var("HOST").unwrap_or_default();
+    let arch = host_triple.split('-').next().unwrap_or(&host_triple);
     let status = Command::new("clang")
         .args([
             "-O2",
@@ -29,7 +30,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "-o",
             dst.to_str().ok_or("dst path is not valid UTF-8")?,
             &format!("-I{}", xdp_dir.display()),
-            &format!("-I/usr/include/{}-linux-gnu", host_arch),
+            &format!("-I/usr/include/{}-linux-gnu", arch),
         ])
         .status()?;
 

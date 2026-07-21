@@ -1,4 +1,4 @@
-FROM eclipse-temurin:21-jre-bookworm
+FROM eclipse-temurin:21-jre-noble
 
 ARG VELOCITY_VERSION=3.4.0-SNAPSHOT
 ARG VELOCITY_BUILD=latest
