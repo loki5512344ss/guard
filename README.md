@@ -10,7 +10,7 @@
 
 # Rampart
 
-Multi-layer DDoS protection for Minecraft servers.
+6-layer DDoS protection for Minecraft servers.
 
 ![Rust](https://img.shields.io/badge/Rust-000000?style=flat-square&logo=rust&logoColor=white)
 ![Java](https://img.shields.io/badge/Java_21-ED8B00?style=flat-square&logo=openjdk&logoColor=white)
@@ -31,49 +31,33 @@ Multi-layer DDoS protection for Minecraft servers.
 
 ### Overview
 
-Rampart is a multi-layer DDoS protection system for Minecraft networks. It filters traffic at kernel level (XDP/eBPF) and application level (Rust) before it reaches your game servers.
+Rampart filters traffic at kernel level (XDP/eBPF), network level (PoW challenge), and application level (Rust + Java) before it reaches game servers.
+
+### 6-Layer Architecture
 
 ```
-Player -> Rampart Edge (XDP + Rust) -> Load Balancer -> Velocity -> Game Server
+Layer 1: XDP/eBPF (C)        TCP state machine, SYN throttle, blacklist, UDP drop
+Layer 2: PoW Challenge (Rust) SHA256 hashcash, dynamic difficulty, anti-handshake-flood
+Layer 3: Rust Core           MC handshake parse, HMAC sign, rate limit, death code
+Layer 4: Velocity (Java)     Domain whitelist, HMAC verify, physics check, CAPTCHA
+Layer 5: Paper Agent (Java)  Redis heartbeat, auto-registration
+Layer 6: Traffic Intel       EWMA thresholds, 168h profiling, reputation
 ```
 
-### Architecture
-
 ```
-                    +--------------------------------------+
-                    |          EDGE LAYER (VDS)             |
-                    |  XDP/eBPF -> Rust Core -> HMAC sign   |
-                    +------------------+-------------------+
-                                       | clean traffic
-                    +------------------v-------------------+
-                    |      Rust Load Balancer / HAProxy     |
-                    +------------------+-------------------+
-                                       |
-                    +------------------+------------------+
-                    v                  v                  v
-              Velocity x20         Hub x100          Game Servers
-              (MC Proxy)           (lobby)           (Survival, Skyblock)
+Атакующий → [XDP/eBPF] → [PoW] → [Rust Core] → [Velocity] → Game Server
+               1           2           3             4
 ```
-
-### Features
-
-| Layer | Technology | What it does |
-|-------|-----------|--------------|
-| **L3/L4** | XDP/eBPF (C) | SYN flood drop, UDP drop (MC=TCP), invalid TCP flags, IP blacklist |
-| **L7** | Rust (tokio) | MC handshake parsing, HMAC-SHA256, rate limit, death code auto-ban |
-| **Proxy** | Velocity (Java) | Domain whitelist, HMAC verification, server registry, load balancing |
-| **Agent** | Paper plugin | Auto-registration in Redis, heartbeat (TPS/online), cleanup on disable |
-| **Management** | Rust (Axum) | REST API with JWT auth, Redis pub/sub blacklist sync, dashboard |
 
 ### Components
 
 | Component | Role | Stack |
 |-----------|------|-------|
-| **rampart-core** | Edge node - traffic filter proxy | Rust (tokio, socket2, prometheus) |
+| **rampart-core** | Edge node - layers 2+3 | Rust (tokio, socket2, prometheus) |
 | **rampart-manager** | Management API + Redis sync | Rust (axum, jsonwebtoken, redis) |
 | **rampart-cli** | CLI tool for operators | Rust (clap) |
-| **velocity-plugin** | Proxy plugin - domain check, HMAC, server registry | Java 21 (Velocity API) |
-| **paper-plugin** | Server agent - Redis registration, heartbeat | Java 21 (Paper API) |
+| **velocity-plugin** | Layer 4 - domain, HMAC, physics, router | Java 21 (Velocity API) |
+| **paper-plugin** | Layer 5 - Redis heartbeat, auto-reg | Java 21 (Paper API) |
 | **dashboard** | Web UI - servers, blacklist, nodes | React + Vite + TypeScript |
 
 ### Performance
@@ -87,7 +71,7 @@ Tested on Hetzner CX31 (4 vCPU, 8GB, KVM), Ubuntu 22.04, kernel 5.15
 | XDP drop (generic) | 3-5M pps | - | ~25% |
 | XDP drop (native) | 15-20M pps | - | ~15% |
 
-Note: 110k conn/s is synthetic echo benchmark. Real L7 throughput (handshake parsing + HMAC + rate limit): ~60-70k conn/s on epoll, ~85-95k on io_uring.
+Note: Real L7 throughput (handshake + HMAC + rate limit): ~60-70k conn/s (epoll), ~85-95k (io_uring).
 
 ### Quick Start
 
@@ -110,10 +94,12 @@ cd plugins && ./gradlew build
 
 | File | Description |
 |------|-------------|
+| [architecture](docs/research/architecture.md) | 6-layer architecture, components, ADRs |
+| [anti-bot](docs/research/anti-bot.md) | Bot detection, PoW, fingerprinting, known issues |
+| [ebpf](docs/research/ebpf.md) | XDP/eBPF: TCP state machine, maps, fixes |
+| [ddos](docs/research/ddos.md) | Attack vectors, L3/L4/L7, AI bots |
 | [deployment](docs/deployment.md) | Step-by-step deployment guide |
 | [configuration](docs/configuration.md) | Configuration examples |
-| [architecture](docs/research/architecture.md) | C4 diagrams, ADRs |
-| [ddos](docs/research/ddos.md) | Attack vectors and defense |
 | [networking](docs/research/networking.md) | WireGuard, BGP Anycast, QUIC |
 | [runbook](docs/runbook.md) | Operations runbook |
 | [disaster_recovery](docs/disaster_recovery.md) | Failover scenarios |
@@ -127,47 +113,47 @@ cd plugins && ./gradlew build
 
 ### Обзор
 
-Rampart - многослойная система DDoS-защиты для Minecraft-серверов. Фильтрует трафик на уровне ядра (XDP/eBPF) и на уровне приложений (Rust) до того, как он достигнет игровых серверов.
+Rampart — 6-слойная система DDoS-защиты для Minecraft. Фильтрует трафик на уровне ядра (XDP/eBPF), уровне сети (PoW), уровне приложений (Rust) и уровне прокси (Velocity).
 
-### Как это работает
+### 6 слоёв защиты
 
 ```
-Атакующий (ботнет)
-    |
-    v
-[1] XDP/eBPF (ядро)     L3/L4: SYN flood, UDP drop, IP blacklist
-    |                    CPU < 30%, дроп до 10M pps
-    v (чистый TCP)
-[2] Rust Core           L7: парсинг handshake, HMAC, rate limit
-    |                    death code auto-ban, blacklist check
-    v (валидный MC клиент)
-[3] Load Balancer       Round-robin, circuit breaker (TPS < 12 = out)
-    |
-    v
-[4] Game Server         Чистый трафик без DDoS нагрузки
+Слой 1: XDP/eBPF (C)       TCP state machine, SYN throttle, blacklist, UDP drop
+Слой 2: PoW Challenge (Rust) SHA256 hashcash, dynamic difficulty
+Слой 3: Rust Core          MC handshake, HMAC sign, rate limit, death code
+Слой 4: Velocity (Java)    Domain whitelist, HMAC verify, physics, CAPTCHA
+Слой 5: Paper Agent (Java) Redis heartbeat, auto-registration
+Слой 6: Traffic Intel      EWMA thresholds, 168h profiling, reputation
+```
+
+```
+Атакующий → [XDP] → [PoW] → [Rust] → [Velocity] → Game Server
+              1       2        3          4
 ```
 
 ### Компоненты
 
 | Компонент | Роль | Технологии |
 |-----------|------|------------|
-| **Edge нода** | Фильтрация + прокси | Rust + XDP/eBPF |
-| **Load Balancer** | Балансировка на Velocity | Rust / HAProxy |
-| **Velocity** | MC прокси, антибот | Java 21 |
-| **Manager** | API + оркестрация | Rust (Axum) |
-| **Paper Agent** | Регистрация сервера | Java 21 (Paper plugin) |
+| **Edge нода** | Слои 1-3: XDP + PoW + фильтрация | Rust + XDP/eBPF |
+| **Manager** | Слой 6: API + мониторинг | Rust (Axum) |
+| **Velocity** | Слой 4: прокси, верификация | Java 21 |
+| **Paper Agent** | Слой 5: регистрация сервера | Java 21 |
+| **Dashboard** | Web UI | React + TypeScript |
 
 ### Защита от атак
 
-| Атака | Метод защиты |
-|-------|-------------|
-| SYN flood | XDP дроп на уровне драйвера |
-| Handshake flood | Token bucket rate limit (Rust) |
-| Slow Loris | Timeout 5 сек на handshake |
-| VarInt overflow | Строгий bounds check |
-| Death code | Auto-ban по невалидным пакетам |
-| Direct IP | Domain whitelist (Velocity) |
-| Подмена hostname | HMAC-SHA256 подпись |
+| Атака | Метод защиты | Слой |
+|-------|-------------|------|
+| SYN flood | XDP дроп + SYN throttle | 1 |
+| Handshake flood | PoW challenge + rate limit | 2+3 |
+| Slow Loris | Timeout 5 сек | 3 |
+| VarInt overflow | Строгий bounds check | 3 |
+| Death code | Auto-ban по малициозным пакетам | 3 |
+| Direct IP | Domain whitelist | 4 |
+| Подмена hostname | HMAC-SHA256 подпись | 3+4 |
+| Боты (физика) | Falling check + Vehicle check | 4 |
+| AI-боты | PoW (CPU cost) + reputation | 2+6 |
 
 ### Быстрый старт
 
@@ -190,10 +176,12 @@ cd plugins && ./gradlew build
 
 | Файл | Описание |
 |------|----------|
+| [architecture](docs/research/architecture.md) | 6-слойная архитектура, компоненты, ADR |
+| [anti-bot](docs/research/anti-bot.md) | Антибот: PoW, fingerprinting, известные проблемы |
+| [ebpf](docs/research/ebpf.md) | XDP/eBPF: TCP state machine, карты, исправления |
+| [ddos](docs/research/ddos.md) | Векторы атак, L3/L4/L7, AI-боты |
 | [deployment](docs/deployment.md) | Пошаговый деплой |
 | [configuration](docs/configuration.md) | Примеры конфигов |
-| [architecture](docs/research/architecture.md) | C4-диаграммы, ADR |
-| [ddos](docs/research/ddos.md) | Векторы атак и защита |
 | [networking](docs/research/networking.md) | WireGuard, BGP, QUIC |
 | [runbook](docs/runbook.md) | Инструкции для админа |
 | [disaster_recovery](docs/disaster_recovery.md) | Failover сценарии |

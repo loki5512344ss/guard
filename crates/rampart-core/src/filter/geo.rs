@@ -1,5 +1,6 @@
 #[cfg(feature = "geoip")]
 pub struct GeoIp {
+    #[allow(dead_code)]
     reader: maxminddb::Reader<Vec<u8>>,
 }
 

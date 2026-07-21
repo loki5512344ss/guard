@@ -2,8 +2,9 @@ use rampart_core::config::Config;
 use rampart_core::filter::blacklist::Blacklist;
 use rampart_core::filter::rate_limit::RateLimiter;
 use rampart_core::metrics;
+use rampart_core::pow::difficulty::DifficultyAdjuster;
 use rampart_core::proxy::listener::ProxyListener;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::watch;
 use tracing_subscriber::EnvFilter;
@@ -63,10 +64,32 @@ async fn main() -> anyhow::Result<()> {
         });
     }
 
+    #[cfg(feature = "xdp")]
+    if config.xdp.enabled {
+        use rampart_core::xdp::{XdpFilter, XdpMetrics};
+
+        let mut filter = XdpFilter::new(&config.xdp.interface);
+        filter.load()?;
+        let xdp_metrics = XdpMetrics::register()?;
+
+        let sd = shutdown_rx.clone();
+        std::thread::spawn(move || {
+            while !*sd.borrow() {
+                filter.drain_events();
+                if let Ok(stats) = filter.get_stats() {
+                    xdp_metrics.update(&stats);
+                }
+                std::thread::sleep(Duration::from_secs(5));
+            }
+            filter.unload().ok();
+        });
+    }
+
     tracing::info!("Rampart edge starting on {}:{}", config.bind.address, config.bind.port);
     tracing::info!("Backend: {}:{}", config.backend.address, config.backend.port);
 
-    let listener = ProxyListener::new(config, rate_limiter, blacklist);
+    let adjuster = Arc::new(Mutex::new(DifficultyAdjuster::default()));
+    let listener = ProxyListener::new(config, rate_limiter, blacklist, adjuster);
     listener.run(shutdown_rx).await
 }
 

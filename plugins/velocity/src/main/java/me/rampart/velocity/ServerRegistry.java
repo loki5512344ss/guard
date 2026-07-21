@@ -12,6 +12,7 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
@@ -22,6 +23,7 @@ public class ServerRegistry {
     private final Logger logger;
     private final String redisUrl;
     private final AtomicInteger counter = new AtomicInteger(0);
+    private final ConcurrentHashMap<String, Double> tpsCache = new ConcurrentHashMap<>();
     private volatile List<RegisteredServer> cachedServers = new ArrayList<>();
 
     public ServerRegistry(ProxyServer proxyServer, Logger logger, String redisUrl) {
@@ -91,6 +93,8 @@ public class ServerRegistry {
                     if (port <= 0) continue;
                     String status = extractJsonString(json, "status");
                     if (!"online".equals(status)) continue;
+                    double tps = extractJsonDouble(json, "tps");
+                    tpsCache.put(name, tps);
                     servers.add(new ServerInfo(name, InetSocketAddress.createUnresolved(ip, port)));
                 } catch (Exception e) {
                     logger.warn("Failed to parse server data for key {}: {}", key, e.getMessage());
@@ -111,6 +115,10 @@ public class ServerRegistry {
 
     public List<RegisteredServer> getCachedServers() {
         return cachedServers;
+    }
+
+    public double getServerTps(String name) {
+        return tpsCache.getOrDefault(name, 20.0);
     }
 
     private static String extractJsonString(String json, String key) {
@@ -137,6 +145,23 @@ public class ServerRegistry {
             return Integer.parseInt(json.substring(start, end));
         } catch (NumberFormatException e) {
             return -1;
+        }
+    }
+
+    private static double extractJsonDouble(String json, String key) {
+        String search = "\"" + key + "\":";
+        int start = json.indexOf(search);
+        if (start < 0) return 20.0;
+        start += search.length();
+        int end = start;
+        while (end < json.length() && (Character.isDigit(json.charAt(end)) || json.charAt(end) == '.')) {
+            end++;
+        }
+        if (end == start) return 20.0;
+        try {
+            return Double.parseDouble(json.substring(start, end));
+        } catch (NumberFormatException e) {
+            return 20.0;
         }
     }
 }

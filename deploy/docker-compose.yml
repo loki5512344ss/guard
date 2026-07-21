@@ -8,6 +8,36 @@ services:
       timeout: 1s
       retries: 5
 
+  clickhouse:
+    image: clickhouse/clickhouse-server:latest
+    container_name: rampart-clickhouse
+    ports:
+      - "8123:8123"
+      - "9000:9000"
+    volumes:
+      - ./clickhouse/schema.sql:/docker-entrypoint-initdb.d/schema.sql:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8123/ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: rampart-grafana
+    ports:
+      - "3000:3000"
+    depends_on:
+      clickhouse:
+        condition: service_started
+    environment:
+      GF_INSTALL_PLUGINS: grafana-clickhouse-datasource
+    volumes:
+      - ./grafana/datasources:/etc/grafana/provisioning/datasources:ro
+      - ./grafana/dashboards:/etc/grafana/provisioning/dashboards:ro
+    restart: unless-stopped
+
   edge:
     build:
       context: ..

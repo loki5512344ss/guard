@@ -3,6 +3,8 @@ pub mod redis;
 #[cfg(feature = "store-redis")]
 pub use redis::start_blacklist_sync;
 
+pub mod clickhouse;
+
 #[allow(async_fn_in_trait)]
 pub trait StateStore: Send + Sync {
     async fn get(&self, key: &str) -> anyhow::Result<Option<String>>;

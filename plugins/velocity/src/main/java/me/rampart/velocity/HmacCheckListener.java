@@ -9,6 +9,9 @@ import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
 import java.security.InvalidKeyException;
 import java.security.NoSuchAlgorithmException;
+import java.util.Map;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 
 public class HmacCheckListener {
 
@@ -16,12 +19,19 @@ public class HmacCheckListener {
     private static final String HMAC_ALGO = "HmacSHA256";
     private static final int HEX_SIG_LENGTH = 64;
 
+    private static final Map<UUID, Boolean> verifiedPlayers = new ConcurrentHashMap<>();
+
     private final Logger logger;
     private final byte[] secret;
 
     public HmacCheckListener(Logger logger, String secret) {
         this.logger = logger;
         this.secret = secret.getBytes();
+    }
+
+    public static void markVerified(UUID uuid) {
+        verifiedPlayers.put(uuid, true);
+        PhysicsCheckListener.clearSuspicion(uuid);
     }
 
     @Subscribe

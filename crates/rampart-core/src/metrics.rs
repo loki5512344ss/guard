@@ -24,6 +24,15 @@ pub static DEATH_CODE_BANS_TOTAL: LazyLock<IntCounterVec> = LazyLock::new(|| {
         .expect("DEATH_CODE_BANS_TOTAL")
 });
 
+pub static POW_CHALLENGES_TOTAL: LazyLock<IntCounterVec> = LazyLock::new(|| {
+    register_int_counter_vec!("rampart_pow_challenges_total", "PoW challenges issued", &["result"])
+        .expect("POW_CHALLENGES_TOTAL")
+});
+
+pub static POW_CURRENT_DIFFICULTY: LazyLock<IntGauge> = LazyLock::new(|| {
+    register_int_gauge!("rampart_pow_current_difficulty", "Current PoW difficulty").expect("POW_CURRENT_DIFFICULTY")
+});
+
 pub async fn run_metrics_server(addr: &str) {
     let listener = match TcpListener::bind(addr).await {
         Ok(l) => l,

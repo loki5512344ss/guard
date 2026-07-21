@@ -1,0 +1,45 @@
+[bind]
+address = "0.0.0.0"
+port = 25565
+
+[backend]
+address = "backend"
+port = 25565
+
+[hmac]
+secret = "test-secret-for-local-dev-only"
+
+[worker]
+count = 4
+
+[limits]
+rate_limit_login_pps = 50
+rate_limit_burst = 100
+
+[store]
+redis_url = ""
+clickhouse_url = "http://clickhouse:8123"
+
+[xdp]
+enabled = false
+interface = "eth0"
+
+[death_code]
+enabled = true
+
+[minecraft]
+ping_timeout_ms = 5000
+handshake_timeout_ms = 10000
+
+[metrics]
+enabled = true
+port = 9090
+
+[logging]
+level = "debug"
+
+[pow]
+enabled = true
+difficulty = 4
+
+whitelist = ["localhost", "127.0.0.1"]

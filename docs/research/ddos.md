@@ -1,55 +1,64 @@
-# DDoS - Векторы атак и защита
+# DDoS — Векторы атак и защита
 
-> Актуально: v0.1+
-> Это лучший раздел документации - глубокий разбор всех известных векторов.
+> Актуально: v0.2+
 
 ---
 
-## Как трафик проходит через защиту
+## Как трафик проходит защиту
 
 ```
 Атакующий (ботнет)
     |
     v
 ┌──────────────────┐
-│  1. NIC / XDP    │  L3/L4: SYN flood, UDP drop, IP blacklist
-│  (kernel, C)     │  CPU < 30%, дроп до 10M pps
+│  XDP/eBPF        │  L3/L4: TCP state machine, SYN throttle,
+│  (ядро)          │  IP blacklist, invalid TCP flags, UDP drop
+│                  │  CPU < 30%, пропускная способность ~10M pps
 └────────┬─────────┘
-         v (чистый TCP)
+         v (чистый TCP, прошёл state machine)
 ┌──────────────────┐
-│  2. Rust Core    │  L7: парсинг handshake, HMAC, rate limit
-│  (userspace)     │  death code auto-ban, blacklist check
+│  PoW Challenge   │  SHA256 hashcash, dynamic difficulty
+│  (Rust)          │  Анти-handshake-flood: CPU затраты на боте
 └────────┬─────────┘
-         v (валидный MC клиент)
+         v (валидный PoW)
 ┌──────────────────┐
-│  3. Load         │  Round-robin, circuit breaker
-│  Balancer/Proxy  │  TPS < 12 = server out
+│  Rust Core       │  L7: handshake parse, HMAC, rate limit,
+│  (userspace)     │  death code auto-ban, blacklist
+│                  │  CPU < 50%, пропускная способность ~85k conn/s
 └────────┬─────────┘
-         v
+         v (валидный MC handshake + HMAC)
 ┌──────────────────┐
-│  4. Game Server  │  Чистый трафик, без DDoS нагрузки
-│  (Velocity/Hub)  │
+│  Velocity        │  Domain whitelist, HMAC verify,
+│  (Java)          │  Физика (falling + vehicle), CAPTCHA
+│                  │  TPS-aware load balancer, circuit breaker
+└────────┬─────────┘
+         v (верифицированный игрок)
+┌──────────────────┐
+│  Game Server     │  Чистый трафик, без DDoS нагрузки
 └──────────────────┘
 ```
 
 Каждый слой отрабатывает и дропает до перехода к следующему.
-XDP отсекает L3/L4 флуд, Rust - L7 атаки на протокол MC.
+XDP — L3/L4, PoW — anti-handshake-flood, Rust — L7, Velocity — верификация.
 
 ---
 
 ## L3/L4 атаки (объёмные)
 
 | Атака | Механизм | Защита | Слой |
-|---|---|---|---|
-| **UDP Flood** | Миллионы UDP пакетов | MC = TCP, UDP дропается на уровне NIC | XDP |
-| **SYN Flood** | Миллионы TCP SYN без ACK | SYN cookies в ядре Linux | XDP + sysctl |
-| **ACK Flood** | Пакеты с ACK без SYN | Stateful connection tracking | XDP |
-| **ICMP Flood** | Ping flood | Отключить ICMP ответы | sysctl |
-| **Amplification** | DNS/NTP усиление | Фильтрация у провайдера (UDP) | Upstream |
-| **Invalid flags** | TCP с мусорными флагами | XDP дроп по флагам | XDP |
-| **IP Spoof** | Поддельный src IP | BPF map проверка + uRPF | XDP |
+|-------|----------|--------|------|
+| **UDP Flood** | Миллионы UDP пакетов | MC = TCP, UDP дроп | XDP |
+| **SYN Flood** | Миллионы TCP SYN без ACK | SYN throttle per-IP + SYN cookies | XDP + sysctl |
+| **ACK Flood** | Пакеты с ACK без SYN | TCP state machine (ACK без SYN → вне state → дроп) | XDP |
+| **ICMP Flood** | Ping flood | `icmp_echo_ignore_all=1` | sysctl |
+| **Amplification** | DNS/NTP усиление | Фильтрация у провайдера | Upstream |
+| **Invalid flags** | SYN+FIN, SYN+RST, URG | `detect_tcp_bypass()` | XDP |
+| **IP Spoof** | Поддельный src IP | uRPF + conntrack seq check | XDP |
+| **Fragmented** | Разбитые TCP пакеты | Дроп first fragment с MF | XDP |
+| **RST flood** | Миллионы RST | Игнорировать RST без matching state | XDP |
+| **FIN flood** | Миллионы FIN | FIN без matching state → дроп | XDP |
 
-### sysctl для L3/L4 защиты
+### sysctl для L3/L4
 
 ```bash
 # SYN flood
@@ -62,7 +71,7 @@ net.ipv4.tcp_syn_retries = 2
 net.ipv4.icmp_echo_ignore_all = 1
 net.ipv4.icmp_echo_ignore_broadcasts = 1
 
-# Общие буферы
+# Буферы
 net.core.rmem_max = 134217728
 net.core.wmem_max = 134217728
 net.core.somaxconn = 65535
@@ -81,156 +90,96 @@ net.ipv4.ip_local_port_range = 1024 65535
 
 ```
 Детект: connections/sec с одного IP > threshold
-Защита: rate limit (token bucket) в Rust
-Параметры: max 5 conn/IP/сек, burst 10
+Защита: PoW Challenge (Layer 2) + rate limit (Layer 3)
+  PoW difficulty повышается при CPS > 50/100/500
+  Rate limit: token bucket 5 conn/IP/sec, burst 10
+
+Уязвимость других решений: Sonar/LimboFilter/AtomGuard
+  не имеют PoW — handshake flood упирается только в
+  rate limit, который обходится через ботнет
 ```
 
 ### Bot Join Flood
-Тысячи фейковых логинов с разных IP.
+Тысячи фейковых логинов с разных IP, каждый с разных IP.
 
 ```
-Детект: LoginStart без предшествующего challenge
-Защита: Sonar antibot (физика на limbo) + custom challenge
-Параметры: очередь 100 одновременных верификаций
+Детект: CPS глобально > threshold (учитываем baseline 168h)
+Защита: PoW (дорого для бота) + falling check (нужна MC физика)
+  + verified DB (прошедшие не проверяются снова)
+
+Уязвимость AtomGuard:
+  SynFloodDetector.effectiveCPS = 0 при < 15 unique IP
+  → атака 14 IP с 100 conn/s каждый = не детектится
+Фикс: не обнулять, per-IP fallback
 ```
 
 ### Ping Flood (Status Request)
-Тысячи пакетов с next_state=1 (не логин, просто пинг).
+Тысячи пакетов с next_state=1 (статус, не логин).
 
 ```
-Детект: status requests/сек > threshold с IP
-Защита: отдельный rate limit для status (next_state=1)
-Параметры: max 2 status/IP/10сек
+Детект: status requests/sec > threshold
+Защита: отдельный rate limit для статуса (next_state=1)
+  max 2 status/IP/10sec, burst 5
 ```
 
 ### Slow Loris (MC вариант)
-Открывают TCP, шлют handshake по 1 байту каждые несколько секунд - занимают слоты.
+Открывают TCP, отправляют handshake по 1 байту — занимают слоты.
 
 ```
-Детект: время на handshake > 5 сек
-Защита: connection timeout (5 сек на получение полного handshake)
-Rust: tokio::time::timeout(Duration::from_secs(5), read_handshake())
-```
-
-### Fragmented Handshake
-Handshake пакет разбит на несколько TCP сегментов - ломает парсеры.
-
-```
-Детект: невозможно, это нормальный TCP
-Защита: robust парсер с reassembly буфером
-        читаем до N байт пока не получим полный пакет
-        timeout если слишком долго
+Детект: время на полный handshake > 5 сек
+Защита: tokio::timeout на чтение handshake
+  Rust: tokio::time::timeout(Duration::from_secs(5), read_handshake())
 ```
 
 ### Fake Forge Flood
-Бесконечный поток Forge handshake с мусорными mod list - ломает парсер.
+Бесконечный поток Forge handshake с мусорными mod list.
 
 ```
-Детект: mod list длиннее разумного (> 500 модов)
-Защита: max_hostname_length = 4096, дроп при превышении
-        парсер с явными bounds check на каждый VarInt
+Детект: mod list > 500 модов или > 4096 байт
+Защита: max_hostname = 4096, max_mods = 500, bounds check на VarInt
 ```
 
 ### VarInt Overflow
-Специально сформированные VarInt которые вызывают integer overflow.
+Специально сформированные VarInt для integer overflow.
 
 ```
 Детект: VarInt > 5 байт (по MC протоколу)
-Защита: строгий bounds check, паника = DROP не crash
-
-// Правильный парсер с защитой
-fn read_varint(buf: &[u8]) -> Result<(i32, usize), Error> {
-    let mut value: i32 = 0;
-    let mut position = 0;
-    for (i, &byte) in buf.iter().enumerate() {
-        if i >= 5 { return Err(Error::VarIntTooBig); } // MAX 5 байт
-        value |= ((byte & 0x7F) as i32) << position;
-        if (byte & 0x80) == 0 { return Ok((value, i + 1)); }
-        position += 7;
-    }
-    Err(Error::Incomplete)
-}
+Защита: строгий bounds check, паника = DROP, не crash
+  Result<T, Error>, не unwrap()
 ```
 
 ---
 
 ## AI-боты (2026)
 
-### Проблема
+### Что обходится
 
-Современные attack frameworks используют AI и базы CAPTCHA решений:
-- Боты проходят физику Sonar (реализован настоящий MC движок)
-- Боты решают математические задачи в чате
-- Боты кликают на блоки по описанию
-- LimboFilter полностью обходится
+| Решение | Обход |
+|---------|-------|
+| **Sonar gravity** | AI симулирует MC физику |
+| **Sonar vehicle** | AI шлёт правильные пакеты лодки |
+| **LimboFilter falling** | AI вычисляет parabola `(0.98^t-1)*3.92` |
+| **Map CAPTCHA (3-4 символа)** | OCR/ML (Sonar #531) |
+| **Timing check** | AI имитирует human distribution |
 
-### Что всё ещё работает
-
-```
-✓ HMAC верификация - только через наш edge (криптография)
-✓ Rate limit на edge - физически ограничивает скорость
-✓ ASN блокировка - датацентры не могут быть "жилыми" IP
-✓ Репутационная система - долго строить репутацию
-✓ Кастомный challenge - нет готового обхода
-✓ Timing analysis - боты отвечают слишком быстро или паттернами
-```
-
-### Кастомный challenge - идеи которые сложно автоматизировать
+### Что работает
 
 ```
-1. Timing-based: игрок должен ответить МЕЖДУ 2 и 8 секундами
-   (слишком быстро = бот, слишком медленно = AFK скрипт)
-
-2. Контекстный вопрос: вопрос зависит от случайного события
-   на сервере в последние 5 минут (бот не знает контекст)
-
-3. Изменяющаяся механика: challenge меняется каждые 6 часов
-   (атакующий должен постоянно обновлять обход)
-
-4. Map-based CAPTCHA: картинка рендерится на карте в инвентаре
-   случайным шрифтом из пула 50+ шрифтов
-
-5. Поведенческий анализ: первые 30 сек на хабе - смотрим
-   на паттерны движения, мыши, взаимодействий
-```
-
-### Timing Analysis
-
-```rust
-// Боты часто отвечают с константной задержкой
-// Реальные игроки - с нормальным распределением
-
-pub struct TimingAnalyzer {
-    response_times: Vec<Duration>,
-}
-
-impl TimingAnalyzer {
-    pub fn is_bot_timing(&self, response_time: Duration) -> f64 {
-        let ms = response_time.as_millis() as f64;
-
-        // Слишком быстро - скрипт
-        if ms < 200.0 { return 0.9; }
-
-        // Слишком ровно - паттерн (variance < 10ms за 5 измерений)
-        if self.response_times.len() >= 5 {
-            let variance = self.calculate_variance();
-            if variance < 10.0 { return 0.85; }
-        }
-
-        // Нормальное распределение - человек
-        0.1
-    }
-}
+✓ PoW (SHA256)        вычислительная стоимость, GPU не асится
+✓ HMAC                криптография, ключ на edge ноде
+✓ Многослойность      6 слоёв вместо 1
+✓ Dynamic difficulty  при атаке повышаем PoW до 12+
+✓ ASN reputation      датацентры = повышенная строгость
 ```
 
 ---
 
-## Circuit Breaker для перегруженных серверов
+## Circuit Breaker
 
 ```
 CLOSED (нормально)
   ↓ TPS < 12 или timeout > 3 сек → OPEN
-OPEN (сервер выведен)
+OPEN (сервер выведен из ротации)
   ↓ через 30 сек → HALF_OPEN (пробный трафик)
 HALF_OPEN
   ↓ успешно → CLOSED
@@ -250,7 +199,7 @@ impl CircuitBreaker {
             CircuitState::Open(tripped_at) => {
                 if tripped_at.elapsed() > Duration::from_secs(30) {
                     self.state = CircuitState::HalfOpen;
-                    true // пробуем
+                    true
                 } else { false }
             }
             CircuitState::HalfOpen => true,
@@ -263,30 +212,60 @@ impl CircuitBreaker {
 
 ## ASN Reputation
 
-Разные лимиты для разных типов сетей:
-
 ```rust
-pub enum AsnReputation {
-    Residential,     // обычный провайдер → стандартные лимиты
-    Datacenter,      // AWS/OVH/Hetzner → строгие лимиты
-    Mobile,          // мобильные сети → средние лимиты (NAT!)
-    Tor,             // Tor exit node → максимальная строгость
-    Vpn,             // известный VPN → настраивается
-    Unknown,
+pub enum AsnCategory {
+    Residential,  // обычный провайдер → 1.0 rate limit
+    Datacenter,   // Hetzner/AWS/OVH → 0.2 rate limit
+    Mobile,       // мобильный NAT → 0.5 (но не блокировать!)
+    Tor,          // Tor exit → 0.05
+    Vpn,          // известный VPN → настраивается
+    Unknown,      // новый IP → 0.5
 }
 
-// rate limit множитель по типу ASN
-fn rate_limit_multiplier(rep: &AsnReputation) -> f64 {
-    match rep {
-        AsnReputation::Residential => 1.0,
-        AsnReputation::Mobile      => 0.5, // NAT - много игроков с 1 IP
-        AsnReputation::Datacenter  => 0.2,
-        AsnReputation::Vpn         => 0.3,
-        AsnReputation::Tor         => 0.05,
-        AsnReputation::Unknown     => 0.5,
+fn rate_multiplier(cat: &AsnCategory) -> f64 {
+    match cat {
+        AsnCategory::Residential => 1.0,
+        AsnCategory::Mobile      => 0.5,
+        AsnCategory::Datacenter  => 0.2,
+        AsnCategory::Vpn         => 0.3,
+        AsnCategory::Tor         => 0.05,
+        AsnCategory::Unknown     => 0.5,
     }
 }
 ```
 
-> ⚠️ Мобильные сети используют NAT - один IP = много реальных игроков.  
-> Не блокируй мобильные ASN полностью, только снижай лимит.
+> ⚠️ Мобильные NAT: один IP = много игроков. Не блокировать, только снижать лимит.
+
+---
+
+## Timing Analysis
+
+```rust
+pub struct TimingAnalyzer {
+    response_times: Vec<f64>,   // ms
+}
+
+impl TimingAnalyzer {
+    pub fn is_bot(&self, response_ms: f64) -> f64 {
+        // Слишком быстро → скрипт
+        if response_ms < 200.0 { return 0.9; }
+
+        // Слишком ровно → паттерн
+        if self.response_times.len() >= 5 {
+            let variance = self.variance();
+            if variance < 10.0 { return 0.85; }
+        }
+
+        // Нормальное распределение → человек
+        0.1
+    }
+
+    fn variance(&self) -> f64 {
+        let mean = self.response_times.iter().sum::<f64>()
+            / self.response_times.len() as f64;
+        self.response_times.iter()
+            .map(|v| (v - mean).powi(2))
+            .sum::<f64>() / self.response_times.len() as f64
+    }
+}
+```

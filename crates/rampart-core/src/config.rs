@@ -23,6 +23,10 @@ pub struct Config {
     pub logging: LoggingConfig,
     #[serde(default)]
     pub metrics: MetricsConfig,
+    #[serde(default)]
+    pub pow: PowConfig,
+    #[serde(default)]
+    pub whitelist: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -139,6 +143,7 @@ pub struct StoreConfig {
     pub redis_url: Option<String>,
     #[serde(default = "default_blacklist_cache_ttl")]
     pub blacklist_cache_ttl_secs: u64,
+    pub clickhouse_url: Option<String>,
 }
 
 fn default_blacklist_cache_ttl() -> u64 {
@@ -150,6 +155,7 @@ impl Default for StoreConfig {
         Self {
             redis_url: None,
             blacklist_cache_ttl_secs: 300,
+            clickhouse_url: None,
         }
     }
 }
@@ -243,6 +249,31 @@ impl Default for DeathCodeConfig {
         Self {
             enabled: true,
             ban_duration_secs: 3600,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct PowConfig {
+    #[serde(default = "default_pow_enabled")]
+    pub enabled: bool,
+    #[serde(default = "default_pow_difficulty")]
+    pub difficulty: u8,
+}
+
+fn default_pow_enabled() -> bool {
+    true
+}
+
+fn default_pow_difficulty() -> u8 {
+    4
+}
+
+impl Default for PowConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            difficulty: 4,
         }
     }
 }

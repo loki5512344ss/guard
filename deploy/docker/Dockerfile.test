@@ -1,0 +1,5 @@
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y ca-certificates libc6 && rm -rf /var/lib/apt/lists/*
+COPY rampart-core /usr/local/bin/rampart-core
+EXPOSE 25565 9090
+ENTRYPOINT ["rampart-core"]

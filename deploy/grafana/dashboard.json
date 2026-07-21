@@ -1,0 +1,60 @@
+{
+  "title": "Rampart — ClickHouse",
+  "uid": "rampart-clickhouse",
+  "panels": [
+    {
+      "title": "Connections per second",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse" },
+      "targets": [
+        {
+          "query": "SELECT $timeSeries AS t, count() AS v FROM rampart_events WHERE $timeFilter AND event_type IN ('connection_allowed', 'connection_blocked') GROUP BY t ORDER BY t",
+          "rawQuery": true,
+          "format": "time_series"
+        }
+      ]
+    },
+    {
+      "title": "Bans per minute",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse" },
+      "targets": [
+        {
+          "query": "SELECT $timeSeries AS t, count() AS v FROM rampart_events WHERE $timeFilter AND event_type = 'ban' GROUP BY t ORDER BY t",
+          "rawQuery": true,
+          "format": "time_series"
+        }
+      ]
+    },
+    {
+      "title": "Active blacklist size",
+      "type": "stat",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse" },
+      "targets": [
+        {
+          "query": "SELECT count(DISTINCT ip) AS v FROM rampart_events WHERE event_type = 'ban' AND timestamp > now() - INTERVAL 5 MINUTE",
+          "rawQuery": true,
+          "format": "table"
+        }
+      ]
+    },
+    {
+      "title": "PoW pass / fail rate",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse" },
+      "targets": [
+        {
+          "query": "SELECT $timeSeries AS t, countIf(event_type = 'pow_passed') AS passed, countIf(event_type = 'pow_failed') AS failed FROM rampart_events WHERE $timeFilter AND event_type IN ('pow_passed', 'pow_failed') GROUP BY t ORDER BY t",
+          "rawQuery": true,
+          "format": "time_series"
+        }
+      ]
+    }
+  ],
+  "schemaVersion": 39,
+  "version": 1
+}

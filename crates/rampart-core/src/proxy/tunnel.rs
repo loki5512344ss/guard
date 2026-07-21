@@ -4,8 +4,11 @@ use crate::filter::blacklist::Blacklist;
 use crate::filter::death_code;
 use crate::filter::rate_limit::RateLimiter;
 use crate::metrics;
+use crate::pow::difficulty::DifficultyAdjuster;
 use crate::proxy::handshake::{McHandshake, read_varint};
-use std::sync::Arc;
+use crate::proxy::pow::handle_pow;
+use std::net::Ipv4Addr;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -14,14 +17,21 @@ pub struct ConnectionHandler {
     config: Arc<Config>,
     rate_limiter: Arc<RateLimiter>,
     blacklist: Arc<Blacklist>,
+    adjuster: Arc<Mutex<DifficultyAdjuster>>,
 }
 
 impl ConnectionHandler {
-    pub fn new(config: Arc<Config>, rate_limiter: Arc<RateLimiter>, blacklist: Arc<Blacklist>) -> Self {
+    pub fn new(
+        config: Arc<Config>,
+        rate_limiter: Arc<RateLimiter>,
+        blacklist: Arc<Blacklist>,
+        adjuster: Arc<Mutex<DifficultyAdjuster>>,
+    ) -> Self {
         Self {
             config,
             rate_limiter,
             blacklist,
+            adjuster,
         }
     }
 
@@ -38,6 +48,31 @@ impl ConnectionHandler {
         if self.blacklist.is_blocked(ip_u32) {
             metrics::CONNECTIONS_TOTAL.with_label_values(&["blocked"]).inc();
             return Ok(());
+        }
+
+        let pow_config = &self.config.pow;
+        let peer_ip = Ipv4Addr::from_bits(ip_u32);
+        if pow_config.enabled && pow_config.difficulty > 0 && !self.config.whitelist.contains(&peer_ip.to_string()) {
+            self.adjuster
+                .lock()
+                .expect("adjuster lock poisoned")
+                .record_connection();
+            let diff = self
+                .adjuster
+                .lock()
+                .expect("adjuster lock poisoned")
+                .current_difficulty();
+            let result = handle_pow(&mut client, peer_ip, diff).await?;
+            if !result {
+                metrics::POW_CHALLENGES_TOTAL.with_label_values(&["failed"]).inc();
+                tracing::debug!("pow: failed for {peer_ip}, dropping connection");
+                return Ok(());
+            }
+            metrics::POW_CHALLENGES_TOTAL.with_label_values(&["passed"]).inc();
+            metrics::POW_CURRENT_DIFFICULTY.set(diff as i64);
+        } else if pow_config.enabled && pow_config.difficulty > 0 {
+            metrics::POW_CHALLENGES_TOTAL.with_label_values(&["skipped"]).inc();
+            metrics::POW_CURRENT_DIFFICULTY.set(pow_config.difficulty as i64);
         }
 
         if !self.rate_limiter.check(ip_u32) {

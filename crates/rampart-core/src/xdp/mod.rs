@@ -1,41 +1,17 @@
-#[cfg(feature = "xdp")]
-pub struct XdpFilter {
-    interface: String,
-}
+mod stats;
+pub use stats::XdpStats;
 
 #[cfg(feature = "xdp")]
-impl XdpFilter {
-    pub fn new(interface: &str) -> Self {
-        Self {
-            interface: interface.to_string(),
-        }
-    }
+mod filter;
+#[cfg(feature = "xdp")]
+pub use filter::XdpFilter;
 
-    pub fn load(&self) -> anyhow::Result<()> {
-        tracing::info!("XDP filter loaded on {}", self.interface);
-        Ok(())
-    }
-
-    pub fn unload(&self) -> anyhow::Result<()> {
-        tracing::info!("XDP filter unloaded from {}", self.interface);
-        Ok(())
-    }
-}
+#[cfg(feature = "xdp")]
+mod metrics;
+#[cfg(feature = "xdp")]
+pub use metrics::XdpMetrics;
 
 #[cfg(not(feature = "xdp"))]
-pub struct XdpFilter;
-
+mod noop;
 #[cfg(not(feature = "xdp"))]
-impl XdpFilter {
-    pub fn new(_interface: &str) -> Self {
-        Self
-    }
-
-    pub fn load(&self) -> anyhow::Result<()> {
-        Ok(())
-    }
-
-    pub fn unload(&self) -> anyhow::Result<()> {
-        Ok(())
-    }
-}
+pub use noop::*;

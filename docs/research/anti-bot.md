@@ -1,6 +1,74 @@
-# Anti-Bot - Sonar, Challenge системы, Fingerprinting
+# Anti-Bot стратегия
 
 > Актуально: v0.2+
+
+---
+
+## 6 слоёв антибот защиты
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│  Слой 1: XDP/eBPF                    дроп L3/L4 на уровне ядра │
+│  ─────────────────────────────────────                              │
+│  TCP state machine: SYN → SYN-ACK → ожидание MC handshake         │
+│  SYN throttle: N SYNs/IP/сек → временный бан                      │
+│  Invalid flags: SYN+FIN, SYN+RST, URG → дроп                     │
+│  UDP: дроп (MC работает только по TCP)                           │
+│                                                                   │
+│  Бот не может: открыть >N TCP соединений/сек с одного IP         │
+├──────────────────────────────────────────────────────────────────┤
+│  Слой 2: PoW Challenge                  анти-handshake-flood     │
+│  ─────────────────────────────────────                              │
+│  Перед HMAC handshake клиент решает SHA256 hashcash:              │
+│  1. Edge шлёт {challenge, difficulty, allowedHex, timestamp}      │
+│  2. Клиент ищет nonce: SHA256(challenge + nonce) начинается с    │
+│     difficulty символов из allowedHex                              │
+│  3. Edge верифицирует, challenge одноразовый (timestamp + nonce)  │
+│  4. Dynamic difficulty: 12 при атаке, 4 в спокойное время        │
+│                                                                   │
+│  Бот не может: открывать >50 handshake/сек (PoW жрёт CPU)        │
+│  Nonce replay невозможен: challenge + timestamp уникальны         │
+├──────────────────────────────────────────────────────────────────┤
+│  Слой 3: Rust Core                       L7 проверки             │
+│  ─────────────────────────────────────                              │
+│  Rate limit: N conn/IP/сек (token bucket)                         │
+│  Death code: 8 паттернов малициозных пакетов → автобан           │
+│  Blacklist: global + per-IP, Redis sync                          │
+│  ASN reputation: датацентры → строже, residential → мягче         │
+│  Timeout: 5 сек на полный handshake (anti-Slow Loris)            │
+│                                                                   │
+│  Бот не может: слать >5 conn/сек, слать мусор в пакетах          │
+├──────────────────────────────────────────────────────────────────┤
+│  Слой 4: Velocity                        верификация игроков     │
+│  ─────────────────────────────────────                              │
+│  Domain whitelist: блок прямых IP, разрешены только наши домены  │
+│  HMAC verify: hostname содержит \0shield\0<sig>                  │
+│  Falling check: spawn Y=512, 128 тиков физики падения            │
+│  Protocol check: Transaction, SetHeldItem, ArmAnimation          │
+│  Vehicle check: Boat + Minecart gravity + paddle packets          │
+│  CAPTCHA: map item или PoW                                        │
+│                                                                   │
+│  Бот не может: зайти без HMAC, пройти физику без симуляции MC   │
+├──────────────────────────────────────────────────────────────────┤
+│  Слой 5: Traffic Intelligence              аналитика            │
+│  ─────────────────────────────────────                              │
+│  168-hour профиль: baseline соединений по часам и дням недели    │
+│  EWMA adaptive thresholds: аномалии относительно baseline        │
+│  Z-Score: 3σ от среднего → алерт                                 │
+│  Reputation: score -100..+100, влияет на rate limit множитель    │
+│  Attack detection: CPS > threshold → режим атаки                 │
+│                                                                   │
+│  Бот не может: атаковать незаметно — дёргает threshold           │
+├──────────────────────────────────────────────────────────────────┤
+│  Слой 6: Verified DB (Redis)              кэш верификации        │
+│  ─────────────────────────────────────                              │
+│  HMAC-SHA256 fingerprint: SHA256(secret, username, IP)            │
+│  TTL: 24 часа без активности, продлевается при каждом входе     │
+│  Skip: верифицированные проходят слои 2-4 мгновенно             │
+│                                                                   │
+│  Бот не может: подделать fingerprint (HMAC, не hashCode)         │
+└──────────────────────────────────────────────────────────────────┘
+```
 
 ## Путь игрока через защиту
 
@@ -9,274 +77,222 @@
     |
     v
 ┌──────────────────┐
-│  Edge нода       │  Rate limit, Blacklist, Death code
-│  Rust            │  Невалидные пакеты → бан IP
+│  XDP/eBPF        │  TCP handshake processing
+│  Ядро Linux      │  Прошёл SYN throttle + state machine
 └────────┬─────────┘
-         v (валидный handshake)
+         v (TCP соединение установлено)
 ┌──────────────────┐
-│  Velocity        │  DomainCheck, HmacCheck
-│  Java            │  Неизвестный домен → блок
+│  PoW Challenge   │  SHA256 hashcash
+│  Rust            │  Dynamic difficulty, одноразовый challenge
 └────────┬─────────┘
-         v (подписанный HMAC)
+         v (PoW решён)
 ┌──────────────────┐
-│  Sonar Limbo     │  Гравитация, Vehicle, TCP timing
-│  Java            │  Не прошёл → блок IP на N мин
+│  Rust Core       │  Rate limit, Death code, Blacklist
+│  userspace       │  HMAC sign hostname
 └────────┬─────────┘
-         v (прошёл физику)
+         v (валидный MC handshake + HMAC)
 ┌──────────────────┐
-│  Custom          │  Timing challenge, Map CAPTCHA
-│  Challenge       │  Не прошёл → блок IP
+│  Velocity        │  Domain whitelist, HMAC verify
+│  Java            │  Falling check → Protocol check
+│                  │  → Vehicle check → CAPTCHA
 └────────┬─────────┘
-         v
+         v (верифицирован)
 ┌──────────────────┐
 │  Hub / Game      │  Игрок на сервере
-│  Server          │  Поведенческий анализ первые 30 сек
+│  Server          │
 └──────────────────┘
 ```
 
-Каждый слой может заблокировать игрока.
-Verified DB на Redis - прошёл один раз, не проверяется снова (TTL 24h).
+## Защита от AI-ботов (2026)
 
----
+### Проблема
+Современные attack frameworks обходят существующие anti-bot решения:
 
-## Слои защиты от ботов
+| Решение | Обход |
+|---------|-------|
+| **Sonar gravity check** | AI симулирует MC физику |
+| **LimboFilter falling** | Робот считает parabola |
+| **Map CAPTCHA (Sonar)** | OCR решает 3-4 символа |
+| **Математические задачи** | AI решает за <100ms |
+| **Timing check** | AI имитирует human timing |
 
-```
-[1] XDP rate limit         - ограничивает скорость SYN flood
-[2] Rust rate limit        - ограничивает connections/сек per IP
-[3] HMAC verification      - только через наш edge (криптография)
-[4] ASN reputation         - датацентровые IP = строже
-[5] Sonar 3.0 (Limbo)     - физическая проверка
-[6] Custom challenge       - кастомная механика (нет готового обхода)
-[7] Behavioral analysis    - паттерны поведения на хабе
-```
-
----
-
-## Sonar 3.0 - базовый слой (июль 2026)
-
-GitHub: `jonesdevelopment/sonar`  
-Версия: 3.x, релиз 12 июля 2026  
-Поддержка: Velocity 3.4-3.5.x, MC 1.8-26.2
-
-### Как работает
+### Что работает против AI
 
 ```
-Игрок → Velocity → Sonar перехватывает
-  ↓
-Отправляет на Limbo (лёгкий фейковый сервер)
-  ↓
-Проверки на Limbo:
-  ├─ Гравитация: игрок должен падать вниз
-  ├─ Vehicle: правильные пакеты при взаимодействии с лодкой
-  ├─ TCP timing: не слишком быстрые ответы
-  └─ Очередь: физически ограничивает число одновременных верификаций
-  ↓
-Прошёл → IP в verified DB → следующие подключения проходят мгновенно
+✓ PoW (Layer 2):        вычислительная стоимость, GPU не помогает
+                        достаточно (SHA256 не memory-hard)
+✓ HMAC (Layer 3+4):     криптография, не обходится без ключа
+✓ ASN reputation:       датацентры = боты
+✓ Dynamic difficulty:   при атаке повышаем PoW сложность
+✓ Многослойность:       нужно обойти 6 слоёв, а не 1
 ```
 
-### Конфиг
-
-```yaml
-# sonar/config.yml
-general:
-  max-online-per-ip: 3
-  min-players-for-attack: 8       # при N+ новых conn/сек → режим атаки
-
-verification:
-  timing:
-    first-packet: 3500            # мс на первый пакет
-    movement: 10000               # мс на проверку физики
-  gravity:
-    enabled: true
-    captcha-on-fail: true
-  vehicle:
-    enabled: true
-
-database:
-  type: MYSQL                     # или POSTGRESQL, H2
-  host: "10.0.0.1"
-  database: "sonar"
-  expiration: 5                   # verified IP живёт N дней
-```
-
----
-
-## Кастомный challenge (поверх Sonar)
-
-### Почему нужен кастомный
-
-```
-Sonar открытый → атакующий читает код → пишет обход
-Кастомный → нет готового обхода → атакующий тратит время
-Меняем механику регулярно → обход устаревает
-```
-
-### Идеи challenge (от простого к сложному)
-
-#### 1. Timing challenge
-```java
-// Игрок должен ответить МЕЖДУ 2 и 8 секундами
-// Боты отвечают мгновенно или с постоянной задержкой
-
-long sent = System.currentTimeMillis();
-// ...ждём ответ...
-long elapsed = System.currentTimeMillis() - sent;
-
-if (elapsed < 2000) {
-    // Слишком быстро - скрипт
-    fail("Ответ слишком быстрый");
-} else if (elapsed > 8000) {
-    // AFK/медленный скрипт
-    fail("Время вышло");
-} else {
-    pass();
-}
-```
-
-#### 2. Map CAPTCHA
-```java
-// Рендерим картинку на карте Minecraft
-// Случайный шрифт из пула 50+ шрифтов
-// Игрок вводит код в чате
-
-MapRenderer renderer = new CaptchaMapRenderer(challenge.getCode());
-ItemStack map = new ItemStack(Material.FILLED_MAP);
-map.setItemMeta(mapMeta);
-player.getInventory().setItemInMainHand(map);
-player.sendMessage("§eВведи код с карты в чат:");
-```
-
-#### 3. Поведенческий анализ (первые 30 сек на хабе)
-```java
-// Смотрим на паттерны движения
-// Реальный игрок: случайные повороты, ускорения, паузы
-// Бот: линейное движение или полная неподвижность
-
-@EventHandler
-public void onPlayerMove(PlayerMoveEvent e) {
-    BehaviorProfile profile = profiles.get(e.getPlayer().getUniqueId());
-    profile.recordMovement(e.getTo());
-
-    if (profile.getSamples() >= 50) {
-        double score = profile.calculateBotProbability();
-        if (score > 0.85) {
-            triggerChallenge(e.getPlayer());
-        }
-    }
-}
-```
-
-#### 4. Контекстный вопрос
-```java
-// Вопрос зависит от случайного события на сервере
-// Бот не знает контекст
-
-String[] events = {"Последний вошедший игрок", "Текущее время на сервере"};
-// "Как зовут последнего игрока который зашёл перед тобой?"
-// Бот не знает → провал
-```
-
----
-
-## Репутационная система IP
+## Fingerprinting (исправленный)
 
 ```rust
-// Каждый IP получает score от -100 до +100
-// Хранится в Redis с TTL
+// В отличие от Sonar (использующего hashCode + сдвиги без соли),
+// Rampart использует HMAC-SHA256 с ротацией ключа:
 
-pub struct IpReputation {
-    score: i32,
-    last_updated: u64,
+use hmac::{Hmac, Mac};
+use sha2::Sha256;
+
+type HmacSha256 = Hmac<Sha256>;
+
+pub fn compute_fingerprint(secret: &[u8], username: &str, ip: &str) -> String {
+    let mut mac = HmacSha256::new_from_slice(secret)
+        .expect("HMAC key");
+    mac.update(username.as_bytes());
+    mac.update(b"\0");
+    mac.update(ip.as_bytes());
+    let result = mac.finalize();
+    hex::encode(result.into_bytes())
 }
 
-impl IpReputation {
-    pub fn apply_event(&mut self, event: ReputationEvent) {
-        let delta = match event {
-            ReputationEvent::SuccessfulLogin    => +10,
-            ReputationEvent::HourWithoutIssues  => +5,
-            ReputationEvent::RateLimitHit       => -20,
-            ReputationEvent::InvalidPacket      => -30,
-            ReputationEvent::BotChallengeFailed => -50,
-            ReputationEvent::BotChallengePass   => +15,
-        };
-        self.score = (self.score + delta).clamp(-100, 100);
-    }
-
-    pub fn get_rate_multiplier(&self) -> f64 {
-        match self.score {
-            s if s >= 80  => 2.0,   // доверенный - больше лимит
-            s if s >= 0   => 1.0,   // нормальный
-            s if s >= -30 => 0.5,   // подозрительный
-            s if s >= -60 => 0.2,   // проблемный
-            _             => 0.05,  // почти в бане
-        }
-    }
-}
+// Свойства:
+// - Нет коллизий (SHA256)
+// - Нет подделки (HMAC, не hash code)
+// - Нет обратной инженерии (secret на edge ноде)
+// - Ротация ключа каждые 24ч
+// - Разные secret для разных слоёв (XDP_key, PoW_key, HMAC_key)
 ```
 
----
-
-## Bloom Filter для блэклиста
+## Verified Player Cache
 
 ```rust
-// Для очень больших блэклистов (миллионы IP)
-// Bloom filter: 1% false positive, но 100x меньше памяти
+// После прохождения всех слоёв — fingerprint в Redis:
+//
+// Ключ:    rampart:verified:{sha256_fingerprint}
+// Значение: { ip, username, verified_at, last_seen, ttl }
+// TTL:     24h (продлевается при каждом входе)
+//
+// При повторном входе:
+// 1. Вычисляем fingerprint
+// 2. Проверяем Redis
+// 3. Если есть и IP совпадает → слои 2-4 пропускаются
+// 4. Если IP изменился → проходим верификацию заново
 
-// HashSet<u32> на 1M IP: ~32 MB
-// Bloom filter на 1M IP:  ~2 MB при p=0.01
+pub fn is_verified(redis: &Client, username: &str, ip: &str) -> bool {
+    let fp = compute_fingerprint(&get_secret(), username, ip);
+    let key = format!("rampart:verified:{}", fp);
 
-use bloomfilter::Bloom;
-
-pub struct FastBlacklist {
-    bloom: Bloom<u32>,       // быстрая предпроверка (может дать false positive)
-    exact: DashMap<u32, BanEntry>, // точная проверка (только если bloom сказал "да")
-}
-
-impl FastBlacklist {
-    pub fn is_blocked(&self, ip: u32) -> bool {
-        // Если bloom говорит "нет" - точно не в блэклисте (нет false negative)
-        if !self.bloom.check(&ip) { return false; }
-        // Bloom говорит "возможно да" - проверяем точно
-        self.exact.contains_key(&ip)
-    }
-}
-```
-
----
-
-## VPN / Proxy детекция
-
-```rust
-pub struct VpnDetector {
-    // MaxMind GeoLite2-ASN + список известных VPN/proxy ASN
-    asn_reader: maxminddb::Reader<Vec<u8>>,
-    vpn_asns: HashSet<u32>,
-    datacenter_keywords: Vec<Regex>,
-}
-
-impl VpnDetector {
-    pub fn classify(&self, ip: IpAddr) -> IpCategory {
-        let Ok(record) = self.asn_reader.lookup::<Asn>(ip) else {
-            return IpCategory::Unknown;
-        };
-
-        if let Some(asn) = record.autonomous_system_number {
-            if self.vpn_asns.contains(&asn) {
-                return IpCategory::VPN;
+    match redis.get::<String>(&key) {
+        Ok(Some(data)) => {
+            let entry: VerifiedEntry = serde_json::from_str(&data).ok()?;
+            if entry.ip == ip {
+                // Продлеваем TTL
+                let _ = redis.expire(&key, 86400);
+                return true;
             }
         }
+        _ => {}
+    }
+    false
+}
+```
 
-        if let Some(org) = record.autonomous_system_organization {
-            if self.datacenter_keywords.iter().any(|r| r.is_match(org)) {
-                return IpCategory::Datacenter;
-            }
+## PoW Challenge (Layer 2)
+
+```rust
+// Hashcash-style proof of work
+// Адаптировано из PowGo: +timestamp, +per-request challenge, dynamic difficulty
+
+pub struct Challenge {
+    pub token: [u8; 16],        // случайный per-request
+    pub timestamp: u64,          // unix ms
+    pub difficulty: u8,          // 4-12, динамический
+    pub allowed_hex: &'static str, // "012def" по умолчанию
+}
+
+pub struct Solution {
+    pub token: [u8; 16],
+    pub nonce: u64,
+}
+
+pub fn verify(challenge: &Challenge, solution: &Solution) -> bool {
+    // 1. Timestamp validity (max 30 seconds old)
+    let age = current_timestamp_ms() - challenge.timestamp;
+    if age > 30_000 { return false; }
+
+    // 2. Token match
+    if challenge.token != solution.token { return false; }
+
+    // 3. Hash verification
+    let mut data = [0u8; 32];
+    data[..16].copy_from_slice(&challenge.token);
+    data[16..24].copy_from_slice(&solution.nonce.to_le_bytes());
+
+    let hash = sha256(&data);
+    let hex = hex::encode(hash);
+    for i in 0..challenge.difficulty as usize {
+        let c = hex.as_bytes()[i] as char;
+        if !challenge.allowed_hex.contains(c) {
+            return false;
         }
+    }
+    true
+}
 
-        IpCategory::Residential
+// Dynamic difficulty adjustment
+pub fn get_difficulty(cps: u64, attack_mode: bool) -> u8 {
+    match (cps, attack_mode) {
+        (_, true) | (cps, _) if cps > 500 => 12,
+        (cps, _) if cps > 100 => 10,
+        (cps, _) if cps > 50  => 8,
+        _ => 4,
     }
 }
 ```
 
-> Список VPN ASN: https://github.com/X4BNet/lists_vpn (обновляется еженедельно)  
-> MaxMind GeoLite2-ASN: бесплатно при регистрации на maxmind.com
+## Матрица атак MHDDoS vs Rampart
+
+Анализ [MHDDoS](https://github.com/MatrixTM/MHDDoS.git) — самый популярный DDoS тул на Python (25k+ stars).
+
+| Метод атаки | Тип | Как работает | Блокируется слоем | Примечание |
+|-------------|-----|-------------|-------------------|-----------|
+| **SYN** | L4 RAW | SYN flood с подделкой source IP | Layer 1 (XDP SYN throttle) | Если XDP отключён — iptables SYN cookie |
+| **TCP** | L4 | randbytes(1024) в TCP сокет | Layer 1 (conntrack) | Аномальный трафик, мало данных |
+| **UDP** | L4 | randbytes(1024) через UDP | Layer 1 (UDP drop) | MC только TCP, UDP дропается |
+| **CPS** | L4 | Открыть/закрыть TCP | Layer 1 (SYN throttle) + Layer 3 (rate limit) | 50+ conn/s → block |
+| **CONNECTION** | L4 | Держать TCP открытым | Layer 1 (idle timeout) + Layer 3 (conntrack) | 30s idle → evict |
+| **MINECRAFT** | L4 | Handshake + ping флуд | Layer 2 (PoW) + Layer 3 (rate limit) | PoW требует CPU |
+| **MCBOT** | L4/L7 | Полная эмуляция игрока (login → чат) | Layer 4 (Physics) + Layer 6 (reputation) | Самый опасный для MC |
+| **ICMP** | L4 RAW | ICMP echo flood | Layer 1 (ICMP rate-limit) | На уровне ядра |
+| **DNS/NTP/MEM** | L4 AMP | Amplification через рефлекторы | Layer 1 (UDP drop) | UDP не на MC порты |
+| **GET/POST/HEAD** | L7 | HTTP флуд | Layer 3 (rate limit) | 100 req/s → block |
+| **CFB** | L7 | HTTP через cloudscraper (обходит CF) | Layer 3 (rate limit per IP) | Прокси не спасают — Rampart видит реальный IP |
+| **SLOW** | L7 | Slowloris: медленные заголовки | Layer 3 (read timeout 10s) | Таймаут закрывает |
+| **BOT** | L7 | Имитация Googlebot | Layer 6 (168h профиль) | Аномалия в час-слоте |
+| **BOMB** | L7 | HTTP/2 через SOCKS5 прокси | Layer 6 (EWMA thresholds) | PPS аномалия |
+| **DGB** | L7 | Обход DDoS-Guard | Layer 3 (HMAC verify) | После HMAC — невалидная подпись |
+| **APACHE** | L7 | Range-атака (CVE-2011-3192) | Layer 3 (packet inspect) | Малый HTTP трафик |
+
+### Сводка
+- **Layer 1 (XDP)** блокирует: SYN, UDP, ICMP, AMP, TCP flood
+- **Layer 2 (PoW)** блокирует: MINECRAFT handshake flood
+- **Layer 3 (Core)** блокирует: CPS, CONNECTION, HTTP flood, SLOW, APACHE
+- **Layer 4 (Physics)** блокирует: MCBOT (неестественное движение)
+- **Layer 6 (Traffic Intel)** блокирует: BOT, BOMB, аномалии по 168h профилю
+- **Не покрыто полностью:** CFB через 10k+ уникальных IP (нужна репутация Layer 6)
+
+## Известные проблемы в других решениях
+
+| Проблема | Где найдено | Наше решение |
+|----------|-------------|--------------|
+| **Fingerprint = hashCode + сдвиги, без соли** | Sonar | HMAC-SHA256 с ротацией ключа |
+| **CAPTCHA проходима AI (3-4 символа, map colors)** | Sonar #531 | PoW вместо/поверх CAPTCHA |
+| **4x re-verification race** | Sonar #611 | Idempotent finish, atomic state |
+| **KeepAlive ID plaintext** | Sonar | Challenge-response с HMAC |
+| **QuietDecoderException как control flow** | Sonar | Result<T, E> без исключений |
+| **checkY() fast-forward** | LimboFilter | Строгий шаг: 1 tick за вызов |
+| **ignoredTicks не сбрасывается** | LimboFilter | Сброс на валидном move |
+| **Memory leak MapData** | LimboFilter #118 | Weak refs, explicit cleanup |
+| **Isolation Forest мёртвый код** | AtomGuard | Реально используем или убираем |
+| **EWMA variance double-smoothing** | AtomGuard | Правильная формула |
+| **Race в pipeline checks.clear/addAll** | AtomGuard | Copy-on-write |
+| **SynFloodDetector при <15 IP отключается** | AtomGuard | Per-IP fallback |
+| **AntiBot plugin пустой** | Infrarust | Реализован с первого коммита |
+| **Rate limit disabled by default** | Infrarust | Enabled по умолчанию |
+| **TCP handshake deadlock (pure ACK drop)** | MC-XDP-eBPF | Не дропать pure ACK |
+| **Stale state on RST/FIN** | MC-XDP-eBPF | Удалять entry на RST |
+| **Nonce replay** | PowGo | Per-request challenge + timestamp |
+| **Static difficulty** | PowGo | Dynamic по CPS |

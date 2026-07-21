@@ -22,7 +22,7 @@
 - **D**: core зависит от `trait StateStore`, не от Redis
 
 ### YAGNI
-- Не пиши io_uring до v0.4, BGP до v0.6, K8s Operator до v0.5
+- Не пиши BGP до v0.6, K8s Operator до v0.5
 - Не добавляй feature flag если фича не готова
 
 ### Rust-специфичные
@@ -35,194 +35,168 @@
 
 ---
 
-## 1. Этапы разработки
+## 1. Текущее состояние (v0.2+)
 
-### Этап 0: Bootstrap (неделя 1)
-- [ ] Инициализировать Cargo workspace (`crates/*`)
-- [ ] GitHub Actions: `cargo check`, `cargo test`, `cargo clippy -- -D warnings`
-- [ ] `cargo-deny` (лицензии, CVE, дубликаты)
-- [ ] `Makefile` с целями: `build`, `test`, `fmt`, `ebpf`, `docker`
-- [ ] `docker-compose.yml` для dev (redis, clickhouse)
-- [ ] `.gitignore`, `CONTRIBUTING.md`, `rustfmt.toml`, `clippy.toml`
-- [ ] **DoD:** `make test` проходит, CI зелёный, `cargo build --release` собирает
+### ✅ Готово
 
----
+| Компонент | Статус |
+|-----------|--------|
+| **rampart-core** (Rust Edge) | ~85% — работает: TCP listener, handshake parse, HMAC sign, rate limit, death code (8 паттернов), blacklist (DashMap + TTL), Redis sync, Prometheus metrics, graceful shutdown |
+| **rampart-manager** (Rust API) | ~80% — работает: JWT auth, CRUD blacklist, servers/nodes list, heartbeat мониторинг |
+| **rampart-cli** (Rust CLI) | ~40% — 3/6 команд (status, doctor, blacklist list/add) |
+| **velocity-plugin** (Java) | ~90% — domain whitelist, HMAC verify (constant-time), Redis server registry (delta-sync), TPS-aware load balancer (circuit breaker < 12 TPS) |
+| **paper-plugin** (Java) | ~90% — Redis heartbeat (TPS/online/sec), auto-registration, graceful shutdown |
+| **dashboard** (React/TS) | ~85% — login, Servers/Blacklist/Nodes таблицы, auto-refresh, dark theme |
+| **CI/CD** | GitHub Actions (Rust check+test+clippy+deny + Java build + Dashboard build + Docker), Makefile, deny.toml |
+| **Docs** | ~80% — architecture, anti-bot, ebpf, ddos, deployment, configuration |
+| **Ref analysis** | Проанализированы Sonar, LimboFilter, AtomGuard, Infrarust, MC-XDP-eBPF, PowGo |
+| **ref/ в .gitignore** | Добавлено |
 
-### Этап 1: MVP — v0.1 (недели 2–4)
-> Edge нода принимает MC соединения, парсит handshake, HMAC, проксирует на Velocity.
+### ❌ Не начато / частично
 
-#### rampart-core
-- [ ] TCP listener с SO_REUSEPORT
-- [ ] VarInt парсер с bounds check
-- [ ] MC Handshake парсер (packet_id=0x00)
-- [ ] HMAC-SHA256 signer
-- [ ] Timeout 1.5s на handshake (Slowloris защита)
-- [ ] TCP proxy (tokio::io::copy_bidirectional)
-- [ ] Config из `config.toml`
-- [ ] Логи через `tracing`
-
-#### rampart-cli
-- [ ] `rampart pki init` — CA + сертификаты
-- [ ] `rampart pki issue --name edge-1 --ip 10.0.100.1`
-
-#### plugins/velocity
-- [ ] DomainCheck: whitelist доменов, блок direct IP
-- [ ] HmacCheck: verify HMAC, extract real IP
-- [ ] Передача real IP в Velocity forwarding
-
-#### plugins/paper
-- [ ] ShieldAgent: авто-регистрация в YAML
-- [ ] Heartbeat: online/tps в файл каждые 10 сек
-
-#### docs
-- [ ] `deployment.md`: как поднять v0.1
-- [ ] `configuration.md`: примеры конфигов
-
-#### Тестирование
-- [ ] Unit: VarInt парсер (overflow, incomplete, граничные случаи)
-- [ ] Unit: HMAC sign/verify (timing, wrong secret)
-- [ ] Integration: tcpkali → handshake доходит до Velocity
-- [ ] Ручной: реальный Minecraft клиент через edge
-
-- [ ] **DoD v0.1:** Реальный игрок заходит через Edge → Velocity, HMAC работает, direct IP блокируется, `cargo test` проходит
+| Компонент | Статус |
+|-----------|--------|
+| **xdp/xdp_filter.c** | 0% — пустой каталог |
+| **PoW Challenge (Layer 2)** | 0% — нужно писать |
+| **GeoIP/ASN reputation** | 0% — enum есть, реализации нет |
+| **Velocity physics** (falling + protocol + vehicle) | 0% |
+| **Traffic Intelligence (Layer 6)** | 0% — EWMA, 168h profiling |
+| **ClickHouse + Grafana** | 0% |
+| **Bloom filter blacklist** | 0% |
 
 ---
 
-### Этап 2: Registry + Redis — v0.2 (недели 5–7)
-- [ ] `trait StateStore` + `impl StateStore for Redis`
-- [ ] DashMap blacklist cache (TTL 5 мин)
-- [ ] Pub/Sub `rampart:blacklist:events`
-- [ ] Token bucket rate limiter per IP
-- [ ] Graceful shutdown (SIGTERM)
+## 2. 6-слойная архитектура (план)
 
-#### rampart-manager
-- [ ] Axum REST API: `GET /api/servers`, `POST /api/blacklist`
-- [ ] JWT auth (Bearer token)
-
-#### plugins/velocity
-- [ ] ServerRegistry: delta-sync из Redis
-- [ ] LoadBalancer: round-robin
-
-#### plugins/paper
-- [ ] ShieldAgent: писать в Redis (`rampart:servers`)
-- [ ] HeartbeatTask: online/tps в Redis
-- [ ] OnDisable: удалять себя из Redis
-
-#### dashboard
-- [ ] React + Vite
-- [ ] Страница Servers (online, tps, статус)
-- [ ] Страница Blacklist
-
-- [ ] **DoD v0.2:** Серверы регистрируются автоматически, блэклист синхронизируется, dashboard работает
+```
+Layer 1: XDP/eBPF (C)        TCP state machine, SYN throttle, blacklist, UDP drop
+Layer 2: PoW Challenge (Rust) SHA256 hashcash, dynamic difficulty
+Layer 3: Rust Core (Rust)     MC handshake, HMAC sign, rate limit, death code
+Layer 4: Velocity (Java)      Domain whitelist, HMAC verify, physics, CAPTCHA
+Layer 5: Paper Agent (Java)   Redis heartbeat, auto-registration
+Layer 6: Traffic Intel (Rust) EWMA thresholds, 168h profiling, reputation
+```
 
 ---
 
-### Этап 3: Observability — v0.3 (недели 8–10)
-#### rampart-core
-- [ ] Prometheus метрики (порт 9090): connections, active, handshake duration, rate limit hits, blacklist size
-- [ ] OpenTelemetry tracing (feature flag)
-- [ ] Structured logs (JSON)
+## 3. Этапы разработки
 
-#### rampart-manager
-- [ ] Prometheus метрики
+### Этап 4: XDP/eBPF — Layer 1 (сейчас)
+
+Цель: Написать полноценный XDP фильтр с TCP state machine, исправив баги Minecraft-XDP-eBPF.
+
+- [x] **Изучен reference Minecraft-XDP-eBPF:**
+  - Найден **TCP handshake deadlock** (pure ACK drop)
+  - Найден **VarInt sign extension UB**
+  - Найдена **stale conntrack на RST/FIN**
+  - Найден **IPv6 bypass**
+  - Найдена **отсутствие LRU на player map**
+
+- [x] `xdp/xdp_filter.c` — TCP state machine (465 строк):
+  - AWAIT_ACK → AWAIT_MC_HANDSHAKE → AWAIT_LOGIN → VERIFIED
+  - **Исправление:** pure ACK → PASS, не DROP
+  - **Исправление:** RST/FIN → удалять conntrack entry
+- [x] `xdp/maps.h` — 6 BPF maps:
+  - `conntrack_map` (LRU_HASH, 16384)
+  - `player_connection_map` (LRU_HASH, 65535) — **LRU, не plain HASH**
+  - `connection_throttle` (LRU_HASH, 65535) — SYN throttle per-IP
+  - `blacklist_map` (LPM_TRIE, 100000) — CIDR blacklist
+  - `whitelist_map` (LPM_TRIE, 1000) — CIDR whitelist
+  - `stats_map` (PERCPU_ARRAY) — счетчики для Prometheus
+- [x] `xdp/protocol.h` — парсеры Minecraft на C
+- [x] `xdp/varint.h` — VarInt (без sign extension UB)
+- [x] `xdp/config.h` — Runtime-конфигурация (volatile const)
+- [x] **Rust loader** (`crates/rampart-core/src/xdp/mod.rs`):
+  - Загрузка .o через libbpf-rs
+  - Attach XDP к интерфейсу через `bpf_xdp_attach`
+  - `ban_ip` / `unban_ip` / `get_stats` методы
+- [x] `build.rs` — компиляция .c → .o (clang -target bpf)
+- [ ] Пропатчить глобальные переменные из config.toml
+- [ ] Чтение ringbuf → blacklist events
+- [ ] BPF stats → Prometheus интеграция
+- [ ] **Тесты:**
+  - `hping3 -S --flood` → XDP дропает, CPU < 30%
+  - `iperf3` UDP flood → XDP дропает
+  - TCP handshake проверка: Minecraft клиент коннектится без задержки
+
+**DoD:** SYN flood 1M pps дропается в XDP, TCP handshake без deadlock, CPU < 30%, CI собирает xdp_filter.o
+
+---
+
+### Этап 2b: PoW Challenge — Layer 2 (после XDP)
+
+- [ ] Challenge generator: случайный token + timestamp + difficulty
+- [ ] Dynamic difficulty: 4 (спокойно) → 12 (атака) по CPS
+- [ ] Nonce verification: SHA256(challenge + nonce) prefix check
+- [ ] Одноразовый challenge (token + timestamp, max 30 сек)
+- [ ] Интеграция в rampart-core: PoW перед HMAC handshake
+- [ ] Тесты: PoW solver timing, nonce replay защита, dynamic adjustment
+
+**DoD:** Edge требует PoW перед handshake, бот не может флудить >50 handshake/сек
+
+---
+
+### Этап 4b: Velocity Physics — Layer 4 (после PoW)
+
+- [ ] Falling check (pre-computed cache: `(0.98^t-1)*3.92`, 128 ticks)
+  - **Исправление:** checkY() без fast-forward, сброс ignoredTicks
+- [ ] Protocol check (Transaction, SetHeldItem, ArmAnimation)
+- [ ] Vehicle check (Boat gravity + Minecart gravity)
+- [ ] CAPTCHA (Map item или PoW как fallback)
+- [ ] HMAC fingerprint (не hashCode!) для verified DB
+- [ ] Idempotent finishVerification() (нет race condition)
+
+---
+
+### Этап 6: Traffic Intelligence — Layer 6
+
+- [ ] 168-hour traffic profiling (per-hour-slot baseline)
+- [ ] EWMA adaptive thresholds (правильная variance формула)
+- [ ] Z-Score anomaly detection (3 consecutive minutes)
+- [ ] Attack detection (CPS/PPS thresholds)
+- [ ] Reputation system (IP score -100..+100)
+- [ ] Discord webhook на атаки
+
+---
+
+### Этап 5: Observability
+
 - [ ] ClickHouse writer (batch, раз в сек, буфер 1000)
-- [ ] ClickHouse schema: `rampart.blocked`
-
-#### plugins/velocity
-- [ ] Prometheus метрики: online, domain failures, registry size
-
-#### plugins/paper
-- [ ] Prometheus метрики: tps, mspt, online
-
-#### dashboard / docs
 - [ ] Grafana dashboard JSON
-- [ ] Страница Attack Log
-- [ ] `observability.md`
-
-- [ ] **DoD v0.3:** Grafana показывает онлайн/TPS/блокировки, ClickHouse хранит логи, алерт на DDoS
+- [ ] Страница Attack Log в dashboard
 
 ---
 
-### Этап 4: XDP + eBPF — v0.4 (недели 11–14)
-#### xdp/
-- [ ] `xdp_filter.c`: UDP drop, SYN rate limit, blacklist (LPM_TRIE)
-- [ ] Ringbuf для событий (баны, rate limit hits)
-- [ ] Rust loader (libbpf-rs, attach/detach)
-- [ ] Feature flag: `xdp`
+### Этап 6b: Scale + HA
 
-#### rampart-core
-- [ ] Интеграция XDP loader в startup
-- [ ] Чтение ringbuf → DashMap blacklist
-- [ ] BPF stats → Prometheus
-
-#### Тестирование
-- [ ] `hping3 -S --flood` → XDP дропает, CPU < 30%
-- [ ] `iperf3` UDP flood → XDP дропает
-
-- [ ] **DoD v0.4:** SYN flood 1M pps дропается в XDP, CPU < 30%, XDP отключается feature flag
-
----
-
-### Этап 5: Anti-Bot — v0.5 (недели 15–18)
-- [ ] GeoIP lookup (maxminddb)
-- [ ] ASN reputation (datacenter строже, mobile мягче)
-- [ ] Adaptive rate limiting (EWMA)
-- [ ] Bloom filter для whitelist
-
-#### plugins/velocity
-- [ ] Интеграция Sonar 3.0
-- [ ] Custom challenge API (timing, map CAPTCHA)
-- [ ] IP reputation score → Redis
-
-- [ ] **DoD v0.5:** Боты блокируются, GeoIP работает, Sonar интегрирован
-
----
-
-### Этап 6: Scale + HA — v0.6 (недели 19–24)
-- [ ] WireGuard hub-and-spoke (CLI автоконфиг)
-- [ ] Rust Load Balancer (SO_REUSEPORT, несколько инстансов)
+- [ ] NATS JetStream (blacklist, drain, audit)
 - [ ] mTLS между всеми компонентами (rustls)
-- [ ] QUIC канал Edge ↔ Manager
-
-#### rampart-manager
-- [ ] NATS JetStream (blacklist, drain)
-- [ ] xDS-like API для динамической конфигурации
 - [ ] Auto-discovery edge нод
-
-#### rampart-cli
-- [ ] `add-node`, `wg sync`, `drain`
-
-- [ ] **DoD v0.6:** 5+ edge нод, drain без потери соединений, mTLS везде
+- [ ] rampart-cli: `drain`, `wg sync`, `add-node`
 
 ---
 
-### Этап 7: Polish — v0.7 (недели 25–28)
-- [ ] io_uring runtime (feature flag, 5.10+)
-- [ ] NUMA-aware allocation (bare metal)
+### Этап 7: Polish
+
+- [ ] io_uring runtime (feature flag)
 - [ ] Zero-copy splice после handshake
 - [ ] SLSA Level 3: signed releases, reproducible builds
-- [ ] `cargo-vet`, secret rotation (dual-key HMAC)
-- [ ] Docker images, GitHub Releases
-
-- [ ] **DoD v0.7:** io_uring +30% throughput, релизы подписаны, доки позволяют поднять систему за час
+- [ ] secret rotation (dual-key HMAC)
 
 ---
 
-## 2. Технический долг (Backlog)
+## 4. Backlog
 
-- [ ] **Refactor:** Вынести `rampart-store` в отдельный crate
-- [ ] **Refactor:** BufferPool на `crossbeam::queue::ArrayQueue`
-- [ ] **Perf:** Registered buffers для io_uring
-- [ ] **Feat:** Bedrock / RakNet (UDP модуль)
-- [ ] **Feat:** Plugin API через WASM
-- [ ] **Feat:** BGP Anycast (требует AS + /24)
-- [ ] **Feat:** ML anomaly detection (IsolationForest)
-- [ ] **Test:** Chaos engineering (random node kills)
-- [ ] **Test:** Fuzzing для handshake parser (`cargo-fuzz`)
+- [ ] Bedrock / RakNet (UDP модуль)
+- [ ] Plugin API через WASM (как Infrarust)
+- [ ] BGP Anycast (требует AS + /24)
+- [ ] ML anomaly detection (Isolation Forest — многомерный, не univariate)
+- [ ] Fuzzing для handshake parser (`cargo-fuzz`)
+- [ ] Chaos engineering (random node kills)
 
 ---
 
-## 3. Definition of Done
+## 5. Definition of Done
 
 ```
 ☐ cargo check / cargo test проходят
@@ -236,7 +210,7 @@
 
 ---
 
-## 4. Anti-Patterns
+## 6. Anti-Patterns
 
 ```
 ❌ Тесты после кода. Пиши до (TDD) или вместе.
@@ -251,4 +225,4 @@
 
 ---
 
-*Версия: 1.0 | Обновляется каждый понедельник*
+*Версия: 2.0 | Обновлён: июль 2026*
