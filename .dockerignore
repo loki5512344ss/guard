@@ -5,6 +5,5 @@ target/
 *.md
 docs/
 crates/*/target/
-plugins/*/build/
 plugins/*/.gradle/
 plugins/.gradle/

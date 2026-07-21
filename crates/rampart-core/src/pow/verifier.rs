@@ -2,7 +2,7 @@ use crate::pow::challenge::Challenge;
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
 
-const ALLOWED: [u8; 4] = [b'0', b'1', b'2', b'3'];
+const ALLOWED: [u8; 4] = *b"0123";
 
 pub fn verify(challenge: &mut Challenge, nonce: &str) -> bool {
     if challenge.used {
