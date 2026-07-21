@@ -1,15 +1,22 @@
 FROM eclipse-temurin:21-jre-noble
 
-ARG VELOCITY_VERSION=3.4.0-SNAPSHOT
-ARG VELOCITY_BUILD=latest
+ARG VELOCITY_VERSION=4.0.0
+ARG VELOCITY_BUILD=6
 
-RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y curl jq && rm -rf /var/lib/apt/lists/*
 
 # Download Velocity
-RUN curl -fsSLo /opt/velocity.jar \
-    "https://api.papermc.io/v2/projects/velocity/versions/${VELOCITY_VERSION}/builds/${VELOCITY_BUILD}/downloads/velocity-${VELOCITY_VERSION}-${VELOCITY_BUILD}.jar" || \
-    curl -fsSLo /opt/velocity.jar \
-    "https://versions.velocitypowered.com/download/${VELOCITY_VERSION}.jar"
+RUN VERSION="${VELOCITY_VERSION}" && \
+    BUILD="${VELOCITY_BUILD}" && \
+    if [ "${BUILD}" = "latest" ]; then \
+        BUILD=$(curl -s -H "User-Agent: rampart/1.0.0 (https://github.com/loki5512344/rampart)" \
+            "https://fill.papermc.io/v3/projects/velocity/versions/${VERSION}/builds" | \
+            jq -r 'first(.[] | select(.channel == "STABLE") | .id) // empty'); \
+    fi && \
+    URL=$(curl -s -H "User-Agent: rampart/1.0.0 (https://github.com/loki5512344/rampart)" \
+        "https://fill.papermc.io/v3/projects/velocity/versions/${VERSION}/builds" | \
+        jq -r --arg b "${BUILD}" 'first(.[] | select(.id == ($b | tonumber)) | .downloads."server:default".url) // empty') && \
+    curl -fsSLo /opt/velocity.jar "${URL}"
 
 COPY deploy/config/velocity.toml /opt/velocity.toml
 COPY plugins/velocity/build/libs/rampart-velocity-*.jar /opt/plugins/
