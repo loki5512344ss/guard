@@ -108,6 +108,8 @@ jobs:
           file: deploy/docker/Dockerfile.velocity
           load: true
           tags: rampart/velocity:ci
+      - name: Download Paper jar
+        run: bash deploy/docker/download-paper.sh
       - name: Build paper
         uses: docker/build-push-action@v6
         with:

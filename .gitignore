@@ -62,3 +62,6 @@ bin/
 
 # Reference projects (cloned for research)
 ref/
+
+# Paper jar cache
+deploy/docker/downloads/

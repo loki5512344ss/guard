@@ -2,20 +2,11 @@ FROM eclipse-temurin:21-jre-noble
 
 ARG PAPER_VERSION=1.21
 ARG PAPER_BUILD=latest
+ARG PAPER_JAR=deploy/docker/downloads/paper.jar
 
-RUN apt-get update && apt-get install -y curl jq && rm -rf /var/lib/apt/lists/*
-
-# Download Paper
-RUN VERSION="${PAPER_VERSION}" && \
-    BUILD="${PAPER_BUILD}" && \
-    BUILDS_JSON=$(curl -s -H "User-Agent: rampart/1.0.0 (https://github.com/loki5512344/rampart)" \
-        -H "Accept-Encoding: identity" \
-        "https://fill.papermc.io/v3/projects/paper/versions/${VERSION}/builds") && \
-    if [ "${BUILD}" = "latest" ]; then \
-        BUILD=$(echo "${BUILDS_JSON}" | jq -r 'first(.[] | select(.channel == "STABLE") | .id) // empty'); \
-    fi && \
-    URL=$(echo "${BUILDS_JSON}" | jq -r --arg b "${BUILD}" 'first(.[] | select(.id == ($b | tonumber)) | .downloads."server:default".url) // empty') && \
-    curl -fsSLo /opt/paper.jar -H "Accept-Encoding: identity" "${URL}"
+# The Paper server jar is downloaded on the CI runner by deploy/docker/download-paper.sh
+# because the fill.papermc.io API is unreliably served inside the BuildKit container.
+COPY ${PAPER_JAR} /opt/paper.jar
 
 COPY deploy/config/server.properties /opt/server.properties
 COPY deploy/config/paper-global.yml /opt/paper-global.yml
