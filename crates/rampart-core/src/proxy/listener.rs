@@ -28,6 +28,7 @@ pub struct ProxyListener {
 }
 
 impl ProxyListener {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         config: Arc<Config>,
         rate_limiter: Arc<RateLimiter>,
