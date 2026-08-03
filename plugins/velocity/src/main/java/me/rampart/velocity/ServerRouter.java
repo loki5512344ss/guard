@@ -38,6 +38,16 @@ public class ServerRouter {
     }
 
     public Optional<RegisteredServer> routeServer(String domain) {
+        String cleanDomain = domain == null ? "" : domain.trim();
+        if (!cleanDomain.isEmpty()) {
+            for (RegisteredServer server : registry.getCachedServers()) {
+                String name = server.getServerInfo().getName();
+                if (cleanDomain.equals(registry.getServerDomain(name))
+                    && registry.getServerTps(name) >= TPS_DEAD) {
+                    return Optional.of(server);
+                }
+            }
+        }
         for (RegisteredServer server : registry.getCachedServers()) {
             double tps = registry.getServerTps(server.getServerInfo().getName());
             if (tps >= TPS_DEAD) {

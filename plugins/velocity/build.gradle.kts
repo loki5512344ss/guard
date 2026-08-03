@@ -14,6 +14,7 @@ dependencies {
 
     implementation("redis.clients:jedis:5.2.0")
 
+    testImplementation("com.velocitypowered:velocity-api:3.4.0-SNAPSHOT")
     testImplementation("org.junit.jupiter:junit-jupiter:5.11.4")
     testImplementation("org.slf4j:slf4j-api:2.0.16")
     testRuntimeOnly("org.slf4j:slf4j-simple:2.0.16")

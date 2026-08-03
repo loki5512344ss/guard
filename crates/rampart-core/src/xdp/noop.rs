@@ -14,7 +14,7 @@ impl XdpFilter {
         Ok(())
     }
     pub fn drain_events(&self) {}
-    pub fn ban_ip(&self, _ip: Ipv4Addr) -> Result<()> {
+    pub fn ban_ip(&self, _ip: Ipv4Addr, _duration_secs: u64) -> Result<()> {
         Ok(())
     }
     pub fn unban_ip(&self, _ip: Ipv4Addr) -> Result<()> {

@@ -42,4 +42,4 @@ level = "debug"
 enabled = true
 difficulty = 4
 
-whitelist = ["localhost", "127.0.0.1"]
+whitelist = ["127.0.0.1", "::1"]

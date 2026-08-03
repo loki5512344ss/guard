@@ -1,10 +1,10 @@
 use crate::pow::challenge::Challenge;
-use std::net::Ipv4Addr;
+use std::net::IpAddr;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::time::{Duration, timeout};
 
-pub async fn handle_pow(stream: &mut TcpStream, peer_ip: Ipv4Addr, difficulty: u8) -> anyhow::Result<bool> {
+pub async fn handle_pow(stream: &mut TcpStream, peer_ip: IpAddr, difficulty: u8) -> anyhow::Result<bool> {
     if difficulty == 0 {
         tracing::debug!("pow: difficulty 0, skipping for {peer_ip}");
         return Ok(true);

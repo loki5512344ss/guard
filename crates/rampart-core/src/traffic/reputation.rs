@@ -1,9 +1,9 @@
 use dashmap::DashMap;
-use std::net::Ipv4Addr;
+use std::net::IpAddr;
 use std::sync::Arc;
 
 pub struct IpReputation {
-    scores: Arc<DashMap<Ipv4Addr, i32>>,
+    scores: Arc<DashMap<IpAddr, i32>>,
 }
 
 impl Default for IpReputation {
@@ -19,21 +19,21 @@ impl IpReputation {
         }
     }
 
-    pub fn record_good(&self, ip: Ipv4Addr) {
+    pub fn record_good(&self, ip: IpAddr) {
         let mut entry = self.scores.entry(ip).or_insert(0);
         *entry = (*entry + 1).min(100);
     }
 
-    pub fn record_bad(&self, ip: Ipv4Addr) {
+    pub fn record_bad(&self, ip: IpAddr) {
         let mut entry = self.scores.entry(ip).or_insert(0);
         *entry = (*entry - 10).max(-100);
     }
 
-    pub fn score(&self, ip: Ipv4Addr) -> i32 {
+    pub fn score(&self, ip: IpAddr) -> i32 {
         self.scores.get(&ip).map(|v| *v).unwrap_or(0)
     }
 
-    pub fn is_trusted(&self, ip: Ipv4Addr) -> bool {
+    pub fn is_trusted(&self, ip: IpAddr) -> bool {
         self.score(ip) > 50
     }
 }
@@ -41,18 +41,22 @@ impl IpReputation {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::net::Ipv4Addr;
+    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+
+    fn v4(octets: [u8; 4]) -> IpAddr {
+        IpAddr::V4(Ipv4Addr::from(octets))
+    }
 
     #[test]
     fn test_reputation_initial_score() {
         let rep = IpReputation::new();
-        assert_eq!(rep.score(Ipv4Addr::new(192, 168, 1, 1)), 0);
+        assert_eq!(rep.score(v4([192, 168, 1, 1])), 0);
     }
 
     #[test]
     fn test_reputation_good() {
         let rep = IpReputation::new();
-        let ip = Ipv4Addr::new(10, 0, 0, 1);
+        let ip = v4([10, 0, 0, 1]);
         rep.record_good(ip);
         assert_eq!(rep.score(ip), 1);
     }
@@ -60,7 +64,7 @@ mod tests {
     #[test]
     fn test_reputation_bad() {
         let rep = IpReputation::new();
-        let ip = Ipv4Addr::new(10, 0, 0, 2);
+        let ip = v4([10, 0, 0, 2]);
         rep.record_bad(ip);
         assert_eq!(rep.score(ip), -10);
     }
@@ -68,7 +72,7 @@ mod tests {
     #[test]
     fn test_reputation_cap_positive() {
         let rep = IpReputation::new();
-        let ip = Ipv4Addr::new(10, 0, 0, 3);
+        let ip = v4([10, 0, 0, 3]);
         for _ in 0..200 {
             rep.record_good(ip);
         }
@@ -78,7 +82,7 @@ mod tests {
     #[test]
     fn test_reputation_cap_negative() {
         let rep = IpReputation::new();
-        let ip = Ipv4Addr::new(10, 0, 0, 4);
+        let ip = v4([10, 0, 0, 4]);
         for _ in 0..20 {
             rep.record_bad(ip);
         }
@@ -88,11 +92,19 @@ mod tests {
     #[test]
     fn test_is_trusted() {
         let rep = IpReputation::new();
-        let ip = Ipv4Addr::new(10, 0, 0, 5);
+        let ip = v4([10, 0, 0, 5]);
         assert!(!rep.is_trusted(ip));
         for _ in 0..51 {
             rep.record_good(ip);
         }
         assert!(rep.is_trusted(ip));
+    }
+
+    #[test]
+    fn test_reputation_v6() {
+        let rep = IpReputation::new();
+        let ip = IpAddr::V6(Ipv6Addr::LOCALHOST);
+        rep.record_bad(ip);
+        assert_eq!(rep.score(ip), -10);
     }
 }

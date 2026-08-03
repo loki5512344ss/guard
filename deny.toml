@@ -36,9 +36,13 @@ ignore = true
 
 [bans]
 multiple-versions = "deny"
-wildcards = "allow"
+wildcards = "deny"
 highlight = "all"
-deny = []
+# rustls-only крипта: не даём тянуть OpenSSL в дерево зависимостей
+deny = [
+    { name = "openssl-sys", version = "*" },
+    { name = "openssl", version = "*" },
+]
 skip = [
     { name = "hashbrown", version = "0.14" },
     { name = "socket2", version = "0.5" },
@@ -49,8 +53,8 @@ skip = [
 skip-tree = []
 
 [sources]
-unknown-registry = "warn"
-unknown-git = "warn"
+unknown-registry = "deny"
+unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
 allow-git = []
 

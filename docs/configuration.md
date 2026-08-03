@@ -49,6 +49,15 @@ count = 4
 enabled = false
 interface = "eth0"
 
+[pow]
+# PoW Challenge (Layer 2). ВЫКЛЮЧЕН по умолчанию (P0-4):
+# текстовый challenge отправляется до handshake и несовместим с ванильными
+# MC-клиентами — они не умеют его решать, и при enabled=true никто не сможет
+# зайти на сервер. Включать только после появления клиентского мода или PoW,
+# совместимого с протоколом Minecraft.
+enabled = false
+difficulty = 4
+
 [limits]
 # Максимум времени на получение handshake (Slowloris защита)
 handshake_timeout_secs = 5

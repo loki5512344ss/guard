@@ -24,6 +24,7 @@ public class ServerRegistry {
     private final String redisUrl;
     private final AtomicInteger counter = new AtomicInteger(0);
     private final ConcurrentHashMap<String, Double> tpsCache = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, String> serverDomains = new ConcurrentHashMap<>();
     private volatile List<RegisteredServer> cachedServers = new ArrayList<>();
 
     public ServerRegistry(ProxyServer proxyServer, Logger logger, String redisUrl) {
@@ -63,6 +64,7 @@ public class ServerRegistry {
             if (!redisNames.contains(name)) {
                 proxyServer.getServer(name).ifPresent(s ->
                     proxyServer.unregisterServer(s.getServerInfo()));
+                serverDomains.remove(name);
                 unregistered++;
             }
         }
@@ -95,6 +97,12 @@ public class ServerRegistry {
                     if (!"online".equals(status)) continue;
                     double tps = extractJsonDouble(json, "tps");
                     tpsCache.put(name, tps);
+                    String domain = extractJsonString(json, "domain");
+                    if (domain != null && !domain.isEmpty()) {
+                        serverDomains.put(name, domain.trim());
+                    } else {
+                        serverDomains.remove(name);
+                    }
                     servers.add(new ServerInfo(name, InetSocketAddress.createUnresolved(ip, port)));
                 } catch (Exception e) {
                     logger.warn("Failed to parse server data for key {}: {}", key, e.getMessage());
@@ -119,6 +127,10 @@ public class ServerRegistry {
 
     public double getServerTps(String name) {
         return tpsCache.getOrDefault(name, 20.0);
+    }
+
+    public String getServerDomain(String name) {
+        return serverDomains.get(name);
     }
 
     private static String extractJsonString(String json, String key) {

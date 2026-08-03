@@ -65,10 +65,16 @@ pub struct HmacConfig {
     pub secret: String,
     #[serde(default = "default_key_rotation")]
     pub key_rotation_interval_secs: u64,
+    #[serde(default = "default_signature_ttl")]
+    pub signature_ttl_secs: u64,
 }
 
 fn default_key_rotation() -> u64 {
     3600
+}
+
+fn default_signature_ttl() -> u64 {
+    60
 }
 
 impl Default for HmacConfig {
@@ -76,6 +82,7 @@ impl Default for HmacConfig {
         Self {
             secret: String::new(),
             key_rotation_interval_secs: 3600,
+            signature_ttl_secs: 60,
         }
     }
 }
@@ -262,7 +269,12 @@ pub struct PowConfig {
 }
 
 fn default_pow_enabled() -> bool {
-    true
+    // PoW выключен по умолчанию: текущий текстовый challenge отправляется до
+    // handshake и несовместим с ванильными MC-клиентами — они не умеют его
+    // решать, поэтому при enabled=true никто не сможет зайти на сервер.
+    // Включать только после появления клиентского мода или PoW, совместимого
+    // с протоколом Minecraft.
+    false
 }
 
 fn default_pow_difficulty() -> u8 {
@@ -272,7 +284,7 @@ fn default_pow_difficulty() -> u8 {
 impl Default for PowConfig {
     fn default() -> Self {
         Self {
-            enabled: true,
+            enabled: false,
             difficulty: 4,
         }
     }

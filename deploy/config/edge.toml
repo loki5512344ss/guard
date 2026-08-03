@@ -33,3 +33,7 @@ port = 9090
 
 [xdp]
 enabled = false
+
+[pow]
+enabled = false
+difficulty = 4

@@ -1,4 +1,5 @@
 use dashmap::DashMap;
+use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -8,7 +9,7 @@ struct BanEntry {
 }
 
 pub struct Blacklist {
-    entries: Arc<DashMap<u32, BanEntry>>,
+    entries: Arc<DashMap<IpAddr, BanEntry>>,
 }
 
 impl Default for Blacklist {
@@ -24,7 +25,7 @@ impl Blacklist {
         }
     }
 
-    pub fn is_blocked(&self, ip: u32) -> bool {
+    pub fn is_blocked(&self, ip: IpAddr) -> bool {
         if let Some(entry) = self.entries.get(&ip) {
             if entry.expires > Instant::now() {
                 return true;
@@ -35,7 +36,7 @@ impl Blacklist {
         false
     }
 
-    pub fn add(&self, ip: u32, duration: Duration, reason: &str) {
+    pub fn add(&self, ip: IpAddr, duration: Duration, reason: &str) {
         self.entries.insert(
             ip,
             BanEntry {
@@ -45,7 +46,7 @@ impl Blacklist {
         );
     }
 
-    pub fn remove(&self, ip: u32) {
+    pub fn remove(&self, ip: IpAddr) {
         self.entries.remove(&ip);
     }
 
@@ -65,34 +66,39 @@ impl Blacklist {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::net::{IpAddr, Ipv4Addr};
+
+    fn ip(octets: [u8; 4]) -> IpAddr {
+        IpAddr::V4(Ipv4Addr::from(octets))
+    }
 
     #[test]
     fn test_blacklist_block() {
         let bl = Blacklist::new();
-        bl.add(0x01020304, Duration::from_secs(60), "test");
-        assert!(bl.is_blocked(0x01020304));
+        bl.add(ip([1, 2, 3, 4]), Duration::from_secs(60), "test");
+        assert!(bl.is_blocked(ip([1, 2, 3, 4])));
     }
 
     #[test]
     fn test_blacklist_not_blocked() {
         let bl = Blacklist::new();
-        bl.add(0x01020304, Duration::from_secs(60), "test");
-        assert!(!bl.is_blocked(0x05060708));
+        bl.add(ip([1, 2, 3, 4]), Duration::from_secs(60), "test");
+        assert!(!bl.is_blocked(ip([5, 6, 7, 8])));
     }
 
     #[test]
     fn test_blacklist_expired() {
         let bl = Blacklist::new();
-        bl.add(0x01020304, Duration::from_millis(1), "test");
+        bl.add(ip([1, 2, 3, 4]), Duration::from_millis(1), "test");
         std::thread::sleep(Duration::from_millis(2));
-        assert!(!bl.is_blocked(0x01020304));
+        assert!(!bl.is_blocked(ip([1, 2, 3, 4])));
     }
 
     #[test]
     fn test_blacklist_remove() {
         let bl = Blacklist::new();
-        bl.add(0x01020304, Duration::from_secs(60), "test");
-        bl.remove(0x01020304);
-        assert!(!bl.is_blocked(0x01020304));
+        bl.add(ip([1, 2, 3, 4]), Duration::from_secs(60), "test");
+        bl.remove(ip([1, 2, 3, 4]));
+        assert!(!bl.is_blocked(ip([1, 2, 3, 4])));
     }
 }

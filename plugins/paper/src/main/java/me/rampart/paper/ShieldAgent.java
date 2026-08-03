@@ -14,6 +14,7 @@ public class ShieldAgent {
     private final RampartPaper plugin;
     private final Jedis jedis;
     private final String serverName;
+    private final String serverDomain;
     private final String serverIp;
     private final int serverPort;
     private BukkitRunnable task;
@@ -34,6 +35,9 @@ public class ShieldAgent {
             name = "paper-" + String.format("%04x", rand);
         }
         this.serverName = name;
+
+        String domain = System.getenv("RAMPART_SERVER_DOMAIN");
+        this.serverDomain = (domain == null) ? "" : domain;
 
         String ip = System.getenv("RAMPART_SERVER_IP");
         if (ip == null || ip.isEmpty()) {
@@ -108,7 +112,8 @@ public class ShieldAgent {
     }
 
     private String buildJson(String status, int online, int maxPlayers, double tps) {
-        return "{\"name\":\"" + serverName + "\",\"type\":\"paper\",\"ip\":\"" + serverIp
+        return "{\"name\":\"" + serverName + "\",\"type\":\"paper\",\"domain\":\"" + serverDomain
+            + "\",\"ip\":\"" + serverIp
             + "\",\"port\":" + serverPort + ",\"status\":\"" + status
             + "\",\"online\":" + online + ",\"max_players\":" + maxPlayers
             + ",\"tps\":" + tps

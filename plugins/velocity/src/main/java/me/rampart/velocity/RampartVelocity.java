@@ -2,7 +2,10 @@ package me.rampart.velocity;
 
 import com.google.inject.Inject;
 import com.velocitypowered.api.event.EventManager;
+import com.velocitypowered.api.event.Subscribe;
+import com.velocitypowered.api.event.player.ServerPostConnectEvent;
 import com.velocitypowered.api.plugin.Plugin;
+import com.velocitypowered.api.proxy.Player;
 import com.velocitypowered.api.proxy.ProxyServer;
 import org.slf4j.Logger;
 
@@ -38,8 +41,10 @@ public class RampartVelocity {
         }
 
         if (secret != null && !secret.isEmpty()) {
-            logger.info("HMAC verification enabled");
-            em.register(this, new HmacCheckListener(logger, secret));
+            long rotationSecs = envLong("RAMPART_HMAC_ROTATION_SECS", 3600);
+            long ttlSecs = envLong("RAMPART_HMAC_TTL_SECS", 60);
+            logger.info("HMAC verification enabled (rotation={}s, ttl={}s)", rotationSecs, ttlSecs);
+            em.register(this, new HmacCheckListener(logger, secret, rotationSecs, ttlSecs));
         } else {
             logger.warn("RAMPART_HMAC_SECRET not set — HMAC verification disabled");
         }
@@ -61,9 +66,37 @@ public class RampartVelocity {
 
         CaptchaHandler captchaHandler = new CaptchaHandler(logger, server);
         em.register(this, captchaHandler);
+        em.register(this, new CaptchaChallengeListener(captchaHandler));
         logger.info("CAPTCHA handler enabled");
 
         logger.info("Server registry + load balancer started with Redis at {}", redisUrl);
+    }
+
+    private static class CaptchaChallengeListener {
+
+        private final CaptchaHandler captchaHandler;
+
+        CaptchaChallengeListener(CaptchaHandler captchaHandler) {
+            this.captchaHandler = captchaHandler;
+        }
+
+        @Subscribe
+        public void onServerPostConnect(ServerPostConnectEvent event) {
+            Player player = event.getPlayer();
+            if (player.isActive()) {
+                captchaHandler.challenge(player);
+            }
+        }
+    }
+
+    private static long envLong(String name, long def) {
+        String value = System.getenv(name);
+        if (value == null || value.isEmpty()) return def;
+        try {
+            return Long.parseLong(value.trim());
+        } catch (NumberFormatException e) {
+            return def;
+        }
     }
 
     private List<String> loadDomainWhitelist() {

@@ -86,23 +86,15 @@ fn handle_event(msg: &Msg, blacklist: &Blacklist) -> anyhow::Result<()> {
     let payload: String = msg.get_payload()?;
     let event: BlacklistEvent = serde_json::from_str(&payload)?;
 
-    let ip_parts: Vec<&str> = event.ip.split('.').collect();
-    if ip_parts.len() != 4 {
-        anyhow::bail!("invalid IP: {}", event.ip);
-    }
-    let mut ip_u32: u32 = 0;
-    for part in &ip_parts {
-        let octet: u32 = part.parse()?;
-        ip_u32 = (ip_u32 << 8) | octet;
-    }
+    let ip: std::net::IpAddr = event.ip.parse()?;
 
     match event.action.as_str() {
         "ban" => {
-            blacklist.add(ip_u32, Duration::from_secs(event.duration_secs), "redis");
+            blacklist.add(ip, Duration::from_secs(event.duration_secs), "redis");
             tracing::info!("blacklist add via Redis: {}", event.ip);
         },
         "unban" => {
-            blacklist.remove(ip_u32);
+            blacklist.remove(ip);
             tracing::info!("blacklist remove via Redis: {}", event.ip);
         },
         a => anyhow::bail!("unknown action: {a}"),

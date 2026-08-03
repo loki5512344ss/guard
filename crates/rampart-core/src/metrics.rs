@@ -33,6 +33,14 @@ pub static POW_CURRENT_DIFFICULTY: LazyLock<IntGauge> = LazyLock::new(|| {
     register_int_gauge!("rampart_pow_current_difficulty", "Current PoW difficulty").expect("POW_CURRENT_DIFFICULTY")
 });
 
+pub static ATTACK_STATUS: LazyLock<IntGauge> = LazyLock::new(|| {
+    register_int_gauge!(
+        "rampart_attack_status",
+        "Attack detector status (0=normal, 1=suspicious, 2=under attack)"
+    )
+    .expect("ATTACK_STATUS")
+});
+
 pub async fn run_metrics_server(addr: &str) {
     let listener = match TcpListener::bind(addr).await {
         Ok(l) => l,

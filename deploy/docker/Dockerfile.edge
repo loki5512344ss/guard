@@ -1,17 +1,18 @@
 FROM rust:slim-bookworm AS builder
 
-RUN apt-get update && apt-get install -y pkg-config libssl-dev && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y pkg-config libssl-dev clang libelf-dev libbpf-dev linux-libc-dev && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 COPY Cargo.toml Cargo.lock rustfmt.toml ./
 COPY crates/ ./crates/
+COPY xdp/ ./xdp/
 
-RUN cargo build --release --bin rampart-core && \
+RUN cargo build --release --features xdp --bin rampart-core && \
     cp target/release/rampart-core /app/rampart-core && \
     strip /app/rampart-core
 
 FROM debian:bookworm-slim
-RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y ca-certificates libelf1 && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /app/rampart-core /usr/local/bin/rampart-core
 

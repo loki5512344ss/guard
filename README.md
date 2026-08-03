@@ -38,6 +38,8 @@ Rampart filters traffic at kernel level (XDP/eBPF), network level (PoW challenge
 ```
 Layer 1: XDP/eBPF (C)        TCP state machine, SYN throttle, blacklist, UDP drop
 Layer 2: PoW Challenge (Rust) SHA256 hashcash, dynamic difficulty, anti-handshake-flood
+         ⚠️ OFF by default: the current text-challenge protocol is incompatible with
+         vanilla clients, which cannot solve it — enable only with a client mod.
 Layer 3: Rust Core           MC handshake parse, HMAC sign, rate limit, death code
 Layer 4: Velocity (Java)     Domain whitelist, HMAC verify, physics check, CAPTCHA
 Layer 5: Paper Agent (Java)  Redis heartbeat, auto-registration
@@ -120,6 +122,8 @@ Rampart — 6-слойная система DDoS-защиты для Minecraft. 
 ```
 Слой 1: XDP/eBPF (C)       TCP state machine, SYN throttle, blacklist, UDP drop
 Слой 2: PoW Challenge (Rust) SHA256 hashcash, dynamic difficulty
+         ⚠️ ВЫКЛЮЧЕН по умолчанию: текущий text-challenge несовместим с ванильными
+         клиентами (они не умеют его решать) — включать только с клиентским модом.
 Слой 3: Rust Core          MC handshake, HMAC sign, rate limit, death code
 Слой 4: Velocity (Java)    Domain whitelist, HMAC verify, physics, CAPTCHA
 Слой 5: Paper Agent (Java) Redis heartbeat, auto-registration
@@ -154,6 +158,11 @@ Rampart — 6-слойная система DDoS-защиты для Minecraft. 
 | Подмена hostname | HMAC-SHA256 подпись | 3+4 |
 | Боты (физика) | Falling check + Vehicle check | 4 |
 | AI-боты | PoW (CPU cost) + reputation | 2+6 |
+
+> **Примечание:** Layer 2 (PoW) **выключен по умолчанию** (`pow.enabled = false`) из-за
+> несовместимости с ванильными клиентами: текстовый challenge отправляется до handshake,
+> и ванильный клиент не умеет его решать — при включении никто не сможет зайти.
+> Включать только после появления клиентского мода или PoW, совместимого с протоколом Minecraft.
 
 ### Быстрый старт
 

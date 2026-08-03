@@ -160,6 +160,7 @@ public class PhysicsCheckListener {
 
     private void triggerReVerify(Player player, PlayerTracker tracker) {
         if (tracker.reVerificationTriggered) return;
+        if (HmacCheckListener.isVerified(player.getUniqueId())) return;
         tracker.reVerificationTriggered = true;
         player.disconnect(Component.text("Re-verification required. Please reconnect."));
         logger.info("Triggered re-verification for {}", player.getUsername());

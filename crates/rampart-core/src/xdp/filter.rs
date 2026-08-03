@@ -77,7 +77,7 @@ impl XdpFilter {
             .with_context(|| format!("map '{}' not found", name))
     }
 
-    pub fn ban_ip(&self, ip: Ipv4Addr) -> Result<()> {
+    pub fn ban_ip(&self, ip: Ipv4Addr, duration_secs: u64) -> Result<()> {
         let map = self.find_map("blacklist_map")?;
         let mut key = [0u8; 8];
         key[0] = 32;
@@ -86,7 +86,11 @@ impl XdpFilter {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_nanos() as u64;
-        map.update(&key, &(now + 300_000_000_000).to_le_bytes(), MapFlags::ANY)?;
+        map.update(
+            &key,
+            &(now + duration_secs * 1_000_000_000).to_le_bytes(),
+            MapFlags::ANY,
+        )?;
         Ok(())
     }
 

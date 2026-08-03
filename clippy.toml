@@ -13,8 +13,10 @@ stack-size-threshold = 512000
 literal-representation-threshold = 120
 
 # --- Разрешённое ---
+# allow-unwrap-in-tests=false: чтобы `unwrap_used = "deny"` из workspace Cargo.toml
+# реально срабатывал и в тестах (дефолт clippy = true, молча глушит deny).
 allow-expect-in-tests = true
-allow-unwrap-in-tests = true
+allow-unwrap-in-tests = false
 allow-dbg-in-tests = false
 allow-print-in-tests = false
 allow-panic-in-tests = false

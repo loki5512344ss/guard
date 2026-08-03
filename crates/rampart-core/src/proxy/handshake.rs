@@ -124,25 +124,25 @@ mod tests {
     #[test]
     fn test_varint_zero() {
         let buf = vec![0x00];
-        assert_eq!(read_varint(&buf, 0).unwrap(), (0, 1));
+        assert_eq!(read_varint(&buf, 0).expect("varint should parse"), (0, 1));
     }
 
     #[test]
     fn test_varint_single() {
         let buf = vec![0x7F];
-        assert_eq!(read_varint(&buf, 0).unwrap(), (127, 1));
+        assert_eq!(read_varint(&buf, 0).expect("varint should parse"), (127, 1));
     }
 
     #[test]
     fn test_varint_multi() {
         let buf = vec![0x80, 0x01];
-        assert_eq!(read_varint(&buf, 0).unwrap(), (128, 2));
+        assert_eq!(read_varint(&buf, 0).expect("varint should parse"), (128, 2));
     }
 
     #[test]
     fn test_varint_max() {
         let buf = vec![0xFF, 0xFF, 0xFF, 0xFF, 0x07];
-        assert_eq!(read_varint(&buf, 0).unwrap(), (i32::MAX, 5));
+        assert_eq!(read_varint(&buf, 0).expect("varint should parse"), (i32::MAX, 5));
     }
 
     #[test]
@@ -173,7 +173,7 @@ mod tests {
         let len = (buf.len() - 1) as u8;
         buf[0] = len;
 
-        let hs = McHandshake::parse(&buf).unwrap();
+        let hs = McHandshake::parse(&buf).expect("valid login handshake should parse");
         assert_eq!(hs.protocol_version, 765);
         assert_eq!(hs.server_address, "play.example.com");
         assert_eq!(hs.server_port, 25565);
@@ -206,7 +206,7 @@ mod tests {
         let len = (buf.len() - 1) as u8;
         buf[0] = len;
 
-        let hs = McHandshake::parse(&buf).unwrap();
+        let hs = McHandshake::parse(&buf).expect("valid status handshake should parse");
         assert_eq!(hs.protocol_version, 2);
         assert_eq!(hs.server_address, "play.example");
         assert_eq!(hs.server_port, 25565);
