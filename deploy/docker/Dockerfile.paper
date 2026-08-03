@@ -8,13 +8,14 @@ RUN apt-get update && apt-get install -y curl jq && rm -rf /var/lib/apt/lists/*
 # Download Paper
 RUN VERSION="${PAPER_VERSION}" && \
     BUILD="${PAPER_BUILD}" && \
-    BUILDS_JSON=$(curl --compressed -s -H "User-Agent: rampart/1.0.0 (https://github.com/loki5512344/rampart)" \
+    BUILDS_JSON=$(curl -s -H "User-Agent: rampart/1.0.0 (https://github.com/loki5512344/rampart)" \
+        -H "Accept-Encoding: identity" \
         "https://fill.papermc.io/v3/projects/paper/versions/${VERSION}/builds") && \
     if [ "${BUILD}" = "latest" ]; then \
         BUILD=$(echo "${BUILDS_JSON}" | jq -r 'first(.[] | select(.channel == "STABLE") | .id) // empty'); \
     fi && \
     URL=$(echo "${BUILDS_JSON}" | jq -r --arg b "${BUILD}" 'first(.[] | select(.id == ($b | tonumber)) | .downloads."server:default".url) // empty') && \
-    curl --compressed -fsSLo /opt/paper.jar "${URL}"
+    curl -fsSLo /opt/paper.jar -H "Accept-Encoding: identity" "${URL}"
 
 COPY deploy/config/server.properties /opt/server.properties
 COPY deploy/config/paper-global.yml /opt/paper-global.yml
