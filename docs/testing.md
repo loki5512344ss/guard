@@ -184,6 +184,25 @@ done
 # (отправляем handshake по 1 байту с задержкой 100ms)
 ```
 
+### Готовый много-IP стресс-тест на VDS (edge-only)
+
+`deploy/test/stress/` — полный цикл без Redis/Velocity/Paper: edge-контейнер с stub-бэкендом
+(socat echo) + attacker-контейнер со 100 source IP. Атака **маскируется под обычный трафик**
+(валидные handshake со случайными hostname), во время флуда параллельно заходят легитимные
+клиенты (`legit.py`), замеряющие RTT.
+
+```bash
+# На VDS
+git clone https://github.com/loki5512344/rampart.git && cd rampart
+cargo build --release --bin rampart-core
+cp target/release/rampart-core deploy/test/stress/edge-ctx/rampart-core
+cd deploy/test/stress && bash run-stress.sh
+```
+
+Фазы: A — сырая пропускная способность (лимиты 100k), B — защита (дефолт 5 pps/IP),
+C — SYN flood, D — активные соединения. Результаты прогона 2026-08-04 —
+в [load-test-report.md](research/load-test-report.md).
+
 ---
 
 ## 6. CI Pipeline

@@ -262,3 +262,76 @@ Before this test, the difficulty adjuster was untested under load. The code anal
   a. Attack connections were being dropped before reaching the tunnel handler (kernel SYN backlog or XDP)
   b. Or the Metrics endpoint polling interval (5s) wasn't capturing the escalation before difficulty reset
 - In v2, with explicit metrics reads at each poll interval, the escalation should be visible
+
+---
+
+## v3 Test — VDS Loopback, Edge-only (2026-08-04)
+
+> Date: 2026-08-04  
+> Scripts: `deploy/test/stress/` (flood.py, legit.py, run-stress.sh)  
+> Environment: VDS 2 vCPU / 3.8 GB RAM / Ubuntu 22.04, Docker bridge 172.30.0.0/24  
+> Target: Rampart v0.2.0, **edge-only** (слои 1–3) — без Redis, Velocity, Paper, ClickHouse  
+> Backend: socat TCP echo (stub) в том же контейнере на 127.0.0.1:25566  
+> XDP: disabled, PoW: disabled, workers: 2
+
+### Setup
+
+| Container | Role | IP |
+|---|---|---|
+| `rampart-edge` | rampart-core + socat stub backend | 172.30.0.2 |
+| `rampart-attacker` | load generator, 100 source IP (172.30.0.101–200) | 172.30.0.3 |
+
+Атака **маскируется под обычный трафик**: `flood.py` отправляет валидные Minecraft handshake
+(protocol 767, packet id 0x00) со случайными hostname и ждёт ответа бэкенда — на уровне L7
+ботнет неотличим от легитимных клиентов. Различение даёт только per-IP rate limit + репутация.
+
+### Phase A — Raw throughput (лимиты сняты: 100k pps/IP)
+
+| Measure | Value |
+|---|---|
+| Flood sent (100 IP, 30s) | ~121.5k handshake |
+| Peak flood rate | ~4.0k conn/s |
+| Edge allowed (proxied to backend) | 121,484 → **100%** |
+| Edge CPU (peak) | ~179% (оба ядра) |
+| Attack detector | `attack_status=1` (Suspicious) на старте, затем 0 (baseline-EWMA адаптируется) |
+
+Легитимные клиенты во время флуда: 2/5 OK (RTT 3–43ms), 3 NO_RESP — без лимитов
+флуд «душит» и легитимных клиентов.
+
+### Phase B — Defense (дефолтные лимиты: 5 pps/IP, burst 10, reputation ban)
+
+| Measure | Value |
+|---|---|
+| Edge blocked | 119,376 |
+| Edge allowed | 528 |
+| Block ratio | **~99.6%** |
+| Edge CPU (max) | ~32% |
+
+Легитимные клиенты во время атаки (тот же флуд, 100 IP): **5/5 OK, RTT 2.2–5.8ms**.
+Rate limit срезает каждый IP до ~5 conn/s, после ~10–20 злоупотреблений IP уходит в
+blacklist (reputation < -40) на 3600s. Реальный клиент (1 conn каждые 5s) не затронут.
+
+### Phase C — SYN flood (hping3 --rand-source)
+
+Edge не пострадал (allowed/blocked не изменились): без XDP SYN-флуд обрабатывает kernel.
+L7 edge задет только при установленных TCP-соединениях.
+
+### Phase D — Active connections
+
+300 keepalive-соединений (валидный handshake, держим открытым) — все проксированы.
+CPU ~0%, память ~7 MB. Удержание соединений упирается в backend (socat fork) и лимит fd,
+не в edge.
+
+### Выводы v3
+
+1. **Полный L7-путь (parse → HMAC sign → backend → relay)**: ~4.0k conn/s на 2-ядерном VDS
+   при 100% прохождении (121.5k за 30s). Узкое место на этой конфигурации — сам генератор
+   (RTT round-trip до echo-бэкенда), не edge.
+2. **Rate limit + reputation работают**: та же маскированная атака режется до ~0.4% прохода
+   (528 vs 119,376 blocked) при CPU ~32%.
+3. **Легитимные клиенты доступны во время атаки**: RTT 2.2–5.8ms, 100% успех в defense-режиме.
+4. **Детектор** отмечает Suspicious на старте флуда, но baseline-EWMA быстро адаптируется —
+   UnderAttack требует устойчивого превышения >3× базового уровня.
+5. **SYN flood без XDP** — вне зоны L7 edge; на этой конфигурации защиту от него даёт
+   только XDP/eBPF или ядро (syncookies).
+

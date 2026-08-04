@@ -75,6 +75,20 @@ Tested on Hetzner CX31 (4 vCPU, 8GB, KVM), Ubuntu 22.04, kernel 5.15
 
 Note: Real L7 throughput (handshake + HMAC + rate limit): ~60-70k conn/s (epoll), ~85-95k (io_uring).
 
+#### VDS stress test (2026-08-04) — edge-only, loopback
+
+VDS 2 vCPU / 3.8GB / Ubuntu 22.04, Docker bridge. Edge-only (слои 1–3), без Redis/Velocity/Paper.
+Атака маскировалась под обычный трафик: 100 source IP, валидные Minecraft handshake.
+Подробности: [load-test-report.md](docs/research/load-test-report.md), скрипты: [deploy/test/stress](deploy/test/stress).
+
+| Scenario | Result |
+|----------|--------|
+| Raw L7 throughput (valid handshake → HMAC → backend) | ~4k conn/s proxied, 100% (121.5k/30s; edge CPU ~179%, 2 cores) |
+| Defense vs masked 100-IP flood (default 5 pps/IP) | **99.6% blocked** (528 allowed vs 119,376 blocked), CPU ~32% |
+| Legit clients during attack | 5/5 OK, RTT 2.2–5.8ms |
+| SYN flood (no XDP) | 0 impact — handled by kernel |
+| Active connections | 300 held trivially (CPU ~0%, 7MB); limit is backend/fd, not edge |
+
 ### Quick Start
 
 ```bash
