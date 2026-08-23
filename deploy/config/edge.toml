@@ -1,39 +1,44 @@
+# Rampart edge — единый конфиг (схема: src/config/sections.rs)
+
 [bind]
 address = "0.0.0.0"
 port = 25565
 
 [backend]
-address = "velocity"
-port = 25577
-
-[hmac]
-secret = "test_secret_32_bytes_long_for_integration_test"
+# Generic TCP-бэкенды за edge-нодой (addr:port)
+upstreams = ["127.0.0.1:25566"]
 
 [workers]
-count = 2
+count = 4
 
 [limits]
 handshake_timeout_secs = 5
 max_connections_per_ip = 10
-rate_limit_status_pps = 2
-rate_limit_login_pps = 5
-rate_limit_burst = 10
+rate_limit_pps = 5.0
+rate_limit_burst = 10.0
+
+[ban]
+ban_duration_secs = 3600
 
 [store]
-redis_url = "redis://redis:6379/0"
+redis_url = ""
 blacklist_cache_ttl_secs = 300
+clickhouse_url = ""
+
+[xdp]
+enabled = false
+interface = "eth0"
 
 [logging]
-level = "debug"
+level = "info"
 format = "text"
 
 [metrics]
 enabled = true
 port = 9090
 
-[xdp]
-enabled = false
-
 [pow]
 enabled = false
 difficulty = 4
+
+whitelist = ["127.0.0.1", "::1"]

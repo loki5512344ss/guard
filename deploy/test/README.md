@@ -8,113 +8,66 @@
 
 ```
 attacker ──┐
-           ├── rampart-edge ── backend
-           │   (XDP отключён в тестах,
-           │    используется userspace-only режим)
-           │
-mclient ───┘  (Minecraft клиент для теста легитимных коннектов)
+           ├── rampart-edge ── backend (TCP echo stub)
+legit ─────┘   (XDP отключён в тестах,
+                используется userspace-only режим)
 ```
 
 ## Быстрый старт
 
 ```bash
-# 1. Сеть
-docker network create rampart-test
-
-# 2. Backend (Minecraft сервер или заглушка)
-docker run -d --name backend --network rampart-test itzg/minecraft-server
-
-# 3. Rampart edge
-docker run -d --name rampart --network rampart-test \
-  -e RAMPART_CONFIG=/etc/rampart/config.toml \
-  -v ./config.test.toml:/etc/rampart/config.toml \
-  rampart-core
-
-# 4. Аттакер (MHDDoS)
-docker run -d --name attacker --network rampart-test \
-  --cap-add=NET_RAW --cap-add=NET_ADMIN \
-  python:3.11 bash -c "while true; do sleep 10; done"
-
-# 5. Легитимный клиент (mclient.py)
-docker run -d --name mclient --network rampart-test \
-  python:3.11 python mclient.py --target rampart:25565
+# 1. Сборка + сеть + backend + edge + attacker
+bash deploy/test/run_test.sh
 ```
+
+Скрипт поднимает:
+- `backend` — TCP echo-заглушка на 25566;
+- `rampart` — edge-нода с конфигом `config.test.toml`;
+- `attacker` — контейнер с python3 для запуска `stress/flood.py`.
 
 ## Сценарии тестирования
 
-### 1. SYN flood
+### 1. TCP connection flood (CPS)
 ```bash
-docker exec attacker python3 /ref/MHDDoS/start.py SYN 172.x.x.x:25565 60 100
+docker exec attacker python3 /flood.py --target rampart --port 25565 \
+  --mode connect --duration 30 --threads 50
 ```
-Ожидание: Rampart XDP дропает SYN-пакеты после превышения throttle.
-Метрика: `rampart_xdp_syn_throttle` растёт, CPU < 30%.
-
-### 2. TCP connection flood (CPS)
-```bash
-docker exec attacker python3 /ref/MHDDoS/start.py CPS 172.x.x.x:25565 60 100
-```
-Ожидание: Rampart rate-limiter блокирует >50 conn/s с одного IP.
+Ожидание: rate-limiter блокирует превышение лимита коннектов с одного IP.
 Метрика: `rampart_rate_limit_hits` растёт.
 
-### 3. Minecraft handshake flood
+### 2. Slowloris (медленные соединения)
 ```bash
-docker exec attacker python3 /ref/MHDDoS/start.py MINECRAFT 172.x.x.x:25565 60 100
+docker exec attacker python3 /flood.py --target rampart --port 25565 \
+  --mode slowloris --duration 30 --threads 200
 ```
-Ожидание: Layer 2 PoW требует решения хэш-задачи.
-Метрика: `rampart_pow_challenges_total{result="failed"}` растёт.
-
-### 4. Сложный ботнет (MHDDoS MCBOT)
-```bash
-docker exec attacker python3 /ref/MHDDoS/start.py MCBOT 172.x.x.x:25565 60 50
-```
-Ожидание: Physics check детектирует неестественное движение.
-Требует: PhysicsCheckListener активен.
-
-### 5. DNS amplification
-```bash
-docker exec attacker python3 /ref/MHDDoS/start.py DNS 172.x.x.x:53 60 100
-```
-Ожидание: XDP дропает UDP не на порты 25565-25575.
-Метрика: `rampart_xdp_dropped` растёт.
-
-### 6. Slowloris (L7)
-```bash
-docker exec attacker python3 /ref/MHDDoS/start.py SLOW http://172.x.x.x:9090 60 100
-```
-Ожидание: Таймаут чтения закрывает соединение.
+Ожидание: таймаут чтения (`limits.handshake_timeout_secs`) закрывает соединения.
 Метрика: `rampart_connections_total{result="blocked"}` растёт.
 
-### 7. HTTP flood через cloudscraper (имитация CFB)
+### 3. SYN flood (raw, требует hping3 или отдельный контейнер)
 ```bash
-docker exec attacker python3 /ref/MHDDoS/start.py CFB http://172.x.x.x:9090 60 100
+hping3 -S --flood -p 25565 <EDGE_IP>
 ```
-Ожидание: L7 rate-limiter блокирует >100 req/s с одного IP.
-Метрика: `rampart_rate_limit_hits` растёт.
+Ожидание: обрабатывается kernel'ом; при включённом XDP — дропается в ядре.
 
-## Легитимный тест (mclient.py)
+## Легитимный клиент
 
-Тест должен проходить: Rampart пропускает нормальный Minecraft handshake.
+Во время атаки параллельно проверяем, что обычные клиенты проходят:
 
 ```bash
-python3 deploy/test/mclient.py --target rampart:25565 --username test_player
+python3 deploy/test/stress/legit.py --target localhost --port 25565
 ```
-Ожидание: HMAC verified, соединение проксируется на backend.
 
 ## Метрики
 
 Все метрики на http://localhost:9090/metrics:
 
 ```
-rampart_xdp_total
-rampart_xdp_passed
-rampart_xdp_dropped
-rampart_xdp_syn_throttle
-rampart_xdp_verified
 rampart_connections_total{result="allowed|blocked"}
-rampart_rate_limit_hits{action="hit"}
+rampart_rate_limit_hits
 rampart_pow_challenges_total{result="passed|failed|skipped"}
 rampart_pow_current_difficulty
+rampart_attack_status
 ```
 
-Grafana: http://localhost:3000 (admin/admin)
-ClickHouse: http://localhost:8123 (для долгосрочных метрик)
+ClickHouse (опционально): http://localhost:8123 — долгосрочное хранение событий.
+Grafana: http://localhost:3000 (admin/admin) — дашборды из `deploy/grafana/`.
