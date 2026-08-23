@@ -3,11 +3,7 @@ address = "0.0.0.0"
 port = 25565
 
 [backend]
-address = "127.0.0.1"
-port = 25566
-
-[hmac]
-secret = "test_secret_32_bytes_long_for_integration_test"
+upstreams = ["127.0.0.1:25566"]
 
 [workers]
 count = 2
@@ -15,21 +11,17 @@ count = 2
 [limits]
 handshake_timeout_secs = 5
 max_connections_per_ip = 100000
-rate_limit_status_pps = 100000
-rate_limit_login_pps = 100000
-rate_limit_burst = 100000
+rate_limit_pps = 100000.0
+rate_limit_burst = 100000.0
 
 [store]
 redis_url = ""
 blacklist_cache_ttl_secs = 300
+clickhouse_url = ""
 
 [xdp]
 enabled = false
 interface = "eth0"
-
-[death_code]
-enabled = true
-ban_duration_secs = 3600
 
 [metrics]
 enabled = true

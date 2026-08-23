@@ -1,62 +1,23 @@
 #!/usr/bin/env python3
-"""Много-IP Minecraft stress generator, маскирующийся под обычный трафик.
+"""Много-IP TCP stress generator.
 
-Отправляет валидные MC handshake с рандомными hostname из разных source IP
-(--ips-start..--ips-end должны быть назначены на eth0 контейнера).
+Открывает TCP-соединения с разных source IP (--ips-start..--ips-end должны
+быть назначены на eth0 контейнера). Без маскировки под конкретный протокол:
+флуд неотличим от обычных TCP-коннектов на уровне L3/L4, различие даёт
+только per-IP rate limit и репутация на edge.
 
 Modes:
   connect    - TCP connect + close (conn/s flood)
-  handshake  - валидный MC handshake + ждём ответ backend (маскировка под клиента)
-  status     - status-ping handshake (state 1)
-  slowloris  - connect + 1 байт + hold
-  keepalive  - connect + handshake + держим соединение
+  slowloris  - connect + 1 байт + hold (медленные соединения)
+  keepalive  - connect + держим соединение открытым
 """
 
 import argparse
 import random
 import socket
-import struct
 import threading
 import time
 from datetime import datetime
-
-HOSTS = [
-    "play.example.com",
-    "mc.example.com",
-    "lobby.example.com",
-    "hub.example.com",
-    "survival.example.com",
-    "skyblock.example.com",
-    "bedwars.example.com",
-    "minigames.example.com",
-    "vip.example.com",
-]
-PROTOCOL = 767
-
-
-def pack_varint(value):
-    buf = []
-    while True:
-        byte = value & 0x7F
-        value >>= 7
-        if value:
-            byte |= 0x80
-        buf.append(byte)
-        if not value:
-            break
-    return bytes(buf)
-
-
-def make_handshake(state=2, host=None):
-    host = host or random.choice(HOSTS)
-    pkt = bytearray()
-    pkt.extend(pack_varint(0))  # packet ID 0x00
-    pkt.extend(pack_varint(PROTOCOL))
-    pkt.extend(pack_varint(len(host)))
-    pkt.extend(host.encode())
-    pkt.extend(struct.pack(">H", 25565))
-    pkt.extend(pack_varint(state))
-    return pack_varint(len(pkt)) + bytes(pkt)
 
 
 def parse_args():
@@ -65,8 +26,8 @@ def parse_args():
     p.add_argument("--port", type=int, default=25565)
     p.add_argument(
         "--mode",
-        choices=["connect", "handshake", "status", "slowloris", "keepalive"],
-        default="handshake",
+        choices=["connect", "slowloris", "keepalive"],
+        default="connect",
     )
     p.add_argument("--duration", type=int, default=30)
     p.add_argument("--threads", type=int, default=100)
@@ -92,30 +53,24 @@ def main():
                 s.bind((src, 0))
                 s.settimeout(args.timeout)
                 s.connect((args.target, args.port))
-                if args.mode == "handshake":
-                    s.sendall(make_handshake())
-                    try:
-                        s.recv(1)
-                    except socket.timeout:
-                        pass
-                elif args.mode == "status":
-                    s.sendall(make_handshake(state=1))
-                    try:
-                        s.recv(1)
-                    except socket.timeout:
-                        pass
+                if args.mode == "connect":
+                    pass
                 elif args.mode == "slowloris":
-                    s.sendall(b"\x01")
-                    time.sleep(30)
+                    try:
+                        s.sendall(b"\x01")
+                        time.sleep(30)
+                    except OSError:
+                        pass
                 elif args.mode == "keepalive":
-                    s.sendall(make_handshake())
-                    time.sleep(30)
+                    try:
+                        time.sleep(30)
+                    except OSError:
+                        pass
                 with stats["lock"]:
                     stats["sent"] += 1
-                s.close()
+                if args.mode == "connect":
+                    s.close()
             except OSError:
-                pass
-            except Exception:
                 pass
 
     threads = [

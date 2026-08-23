@@ -1,6 +1,0 @@
-name: Rampart
-version: '0.1.0'
-main: me.rampart.paper.RampartPaper
-api-version: '1.21'
-author: loki
-description: HMAC hostname verification for Rampart

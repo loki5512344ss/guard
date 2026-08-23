@@ -2,13 +2,10 @@
 
 CARGO = cargo
 TARGET_DIR = target
-GRADLE = ./gradlew
 
-.PHONY: all build test check fmt clippy clean release
-.PHONY: deny audit ebpf
-.PHONY: plugins paper velocity
+.PHONY: all build release test check check-all fmt fmt-check clippy clean deny audit
+.PHONY: ebpf ebpf-clean
 .PHONY: docker docker-build docker-up docker-down docker-logs
-.PHONY: dash dash-dev dash-build
 .PHONY: ci ci-full
 
 all: check test build
@@ -52,37 +49,16 @@ audit:
 
 ebpf:
 	@echo "Building XDP/eBPF filter..."
-	cd xdp && clang -O2 -target bpf -c xdp_filter.c -o xdp_filter.o 2>/dev/null || \
+	mkdir -p $(TARGET_DIR)/xdp && \
+	clang -O2 -g -target bpf -c xdp/core/universal_filter.c -o $(TARGET_DIR)/xdp/universal_filter.o 2>/dev/null || \
 	echo "WARNING: clang+bpf not installed, skipping eBPF build"
 
 ebpf-clean:
-	rm -f xdp/xdp_filter.o
-
-# --- Java Plugins ---
-
-plugins:
-	cd plugins && $(GRADLE) build
-
-paper:
-	cd plugins && $(GRADLE) :paper:build
-
-velocity:
-	cd plugins && $(GRADLE) :velocity:build
-
-# --- Dashboard ---
-
-dash-install:
-	cd dashboard && npm ci
-
-dash-dev:
-	cd dashboard && npm run dev
-
-dash-build:
-	cd dashboard && npm run build
+	rm -f $(TARGET_DIR)/xdp/universal_filter.o
 
 # --- Docker ---
 
-docker-build: plugins
+docker-build:
 	docker compose -f deploy/docker-compose.yml build
 
 docker-up: docker-build
@@ -102,5 +78,5 @@ checkstyle: fmt-check clippy
 ci: checkstyle test build deny
 	@echo "✓ CI passed"
 
-ci-full: ci plugins dash-build
+ci-full: ci ebpf
 	@echo "✓ Full CI passed"

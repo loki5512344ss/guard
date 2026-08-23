@@ -44,6 +44,7 @@ services:
       dockerfile: deploy/docker/Dockerfile.edge
     ports:
       - "25565:25565"
+      - "9090:9090"
     environment:
       RAMPART_CONFIG: /etc/rampart/config.toml
     volumes:
@@ -51,28 +52,3 @@ services:
     depends_on:
       redis:
         condition: service_healthy
-
-  velocity:
-    build:
-      context: ../..
-      dockerfile: deploy/docker/Dockerfile.velocity
-    environment:
-      RAMPART_HMAC_SECRET: test_secret_32_bytes_long_for_integration_test
-      RAMPART_ALLOWED_DOMAINS: play.example.com
-    ports:
-      - "25577:25577"
-    depends_on:
-      - paper
-
-  paper:
-    build:
-      context: ../..
-      dockerfile: deploy/docker/Dockerfile.paper
-    environment:
-      EULA: "true"
-      RAMPART_HMAC_SECRET: test_secret_32_bytes_long_for_integration_test
-      RAMPART_ALLOWED_DOMAINS: play.example.com
-    ports:
-      - "25566:25566"
-    depends_on:
-      - redis

@@ -1,34 +1,9 @@
 #!/usr/bin/env python3
-"""Легитимный Minecraft клиент: подключается ВО ВРЕМЯ DDoS и меряет RTT."""
+"""Generic TCP-клиент: подключается ВО ВРЕМЯ DDoS и меряет RTT."""
 
 import argparse
 import socket
-import struct
 import time
-
-
-def pack_varint(value):
-    buf = []
-    while True:
-        byte = value & 0x7F
-        value >>= 7
-        if value:
-            byte |= 0x80
-        buf.append(byte)
-        if not value:
-            break
-    return bytes(buf)
-
-
-def make_handshake(host="play.example.com", port=25565, state=2):
-    pkt = bytearray()
-    pkt.extend(pack_varint(0))
-    pkt.extend(pack_varint(767))
-    pkt.extend(pack_varint(len(host)))
-    pkt.extend(host.encode())
-    pkt.extend(struct.pack(">H", port))
-    pkt.extend(pack_varint(state))
-    return pack_varint(len(pkt)) + bytes(pkt)
 
 
 def main():
@@ -47,7 +22,7 @@ def main():
         try:
             s = socket.create_connection((args.target, args.port), timeout=args.timeout)
             s.settimeout(args.timeout)
-            s.sendall(make_handshake())
+            # Ждём первый байт от edge (PoW challenge / upstream-ответ).
             resp = s.recv(1)
             rtt = (time.time() - t0) * 1000
             ok = len(resp) > 0
