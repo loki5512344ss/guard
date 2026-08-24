@@ -2,8 +2,8 @@
 mod sections;
 
 pub use sections::{
-    BackendConfig, BanConfig, BindConfig, LimitsConfig, LoggingConfig, MetricsConfig, PowConfig, StoreConfig,
-    WorkerConfig, XdpConfig,
+    BackendConfig, BanConfig, BindConfig, DetectConfig, DetectPrefixConfig, LimitsConfig, LoggingConfig, MetricsConfig,
+    PowConfig, StoreConfig, WorkerConfig, XdpConfig,
 };
 
 use serde::Deserialize;
@@ -31,6 +31,8 @@ pub struct Config {
     pub metrics: MetricsConfig,
     #[serde(default)]
     pub pow: PowConfig,
+    #[serde(default)]
+    pub detect: DetectConfig,
     #[serde(default)]
     pub whitelist: Vec<String>,
 }
@@ -69,6 +71,9 @@ impl Config {
             if entry.parse::<std::net::IpAddr>().is_err() {
                 anyhow::bail!("invalid whitelist entry: {entry}");
             }
+        }
+        if self.detect.prefix.enabled && self.detect.prefix.syn_threshold == 0 {
+            anyhow::bail!("detect.prefix.syn_threshold must be positive when enabled");
         }
         Ok(())
     }
@@ -138,6 +143,45 @@ upstreams = ["not-an-addr"]
     #[test]
     fn invalid_whitelist_entry_rejected() {
         let result = Config::parse_str("whitelist = [\"999.999.1.1\"]");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn prefix_detect_defaults_disabled() {
+        let config = Config::parse_str("").expect("empty config should parse");
+        assert!(!config.detect.prefix.enabled);
+        assert_eq!(config.detect.prefix.syn_threshold, 500);
+        assert_eq!(config.detect.prefix.window_secs, 10);
+        assert_eq!(config.detect.prefix.min_unique_sources, 16);
+    }
+
+    #[test]
+    fn prefix_detect_section_parses() {
+        let config = Config::parse_str(
+            r#"
+[detect.prefix]
+enabled = true
+syn_threshold = 1000
+window_secs = 5
+min_unique_sources = 8
+"#,
+        )
+        .expect("detect.prefix section should parse");
+        assert!(config.detect.prefix.enabled);
+        assert_eq!(config.detect.prefix.syn_threshold, 1000);
+        assert_eq!(config.detect.prefix.window_secs, 5);
+        assert_eq!(config.detect.prefix.min_unique_sources, 8);
+    }
+
+    #[test]
+    fn prefix_detect_zero_threshold_rejected_when_enabled() {
+        let result = Config::parse_str(
+            r#"
+[detect.prefix]
+enabled = true
+syn_threshold = 0
+"#,
+        );
         assert!(result.is_err());
     }
 }

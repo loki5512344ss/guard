@@ -1,9 +1,11 @@
 use anyhow::{Context, Result, bail};
 use libbpf_rs::{MapCore, MapFlags, Object, ObjectBuilder, RingBuffer, RingBufferBuilder, Xdp, XdpFlags};
+use std::net::IpAddr;
 use std::net::Ipv4Addr;
 use std::os::unix::io::AsFd;
 
 use super::XdpStats;
+use crate::traffic::prefix::{PrefixKey, PrefixStatsVal};
 
 pub struct XdpFilter {
     obj: Option<Object>,
@@ -78,17 +80,28 @@ impl XdpFilter {
     }
 
     pub fn ban_ip(&self, ip: Ipv4Addr, duration_secs: u64) -> Result<()> {
+        self.blacklist_update(32, &ip.octets(), duration_secs)
+    }
+
+    /// Бан CIDR через `blacklist_map` (LPM trie): длина префикса в key[0].
+    ///
+    /// # Errors
+    /// XDP не загружен, IPv6-префиксы (ядро их пока не банит) или ошибка карты.
+    pub fn ban_cidr(&self, prefix: IpAddr, prefix_len: u8, duration_secs: u64) -> Result<()> {
+        let IpAddr::V4(net) = prefix else {
+            bail!("ipv6 cidr bans not supported yet");
+        };
+        self.blacklist_update(prefix_len, &net.octets(), duration_secs)
+    }
+
+    fn blacklist_update(&self, prefix_len: u8, v4: &[u8; 4], duration_secs: u64) -> Result<()> {
         let map = self.find_map("blacklist_map")?;
         let mut key = [0u8; 8];
-        key[0] = 32;
-        key[4..8].copy_from_slice(&ip.octets());
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos() as u64;
+        key[0] = prefix_len;
+        key[4..8].copy_from_slice(v4);
         map.update(
             &key,
-            &(now + duration_secs * 1_000_000_000).to_le_bytes(),
+            &(unix_ns() + duration_secs * 1_000_000_000).to_le_bytes(),
             MapFlags::ANY,
         )?;
         Ok(())
@@ -101,6 +114,28 @@ impl XdpFilter {
         key[4..8].copy_from_slice(&ip.octets());
         map.delete(&key)?;
         Ok(())
+    }
+
+    /// Читает карту `prefix_stats` (агрегаты по префиксам /24 и /64).
+    ///
+    /// # Errors
+    /// XDP не загружен, карта отсутствует в объекте или ошибка BPF-чтения.
+    pub fn read_prefix_stats(&self) -> Result<Vec<(PrefixKey, PrefixStatsVal)>> {
+        let map = self.find_map("prefix_stats")?;
+        let mut out = Vec::new();
+        for key in map.keys() {
+            let Ok(kb) = <[u8; 24]>::try_from(key.as_slice()) else {
+                continue;
+            };
+            let Some(val) = map.lookup(&kb, MapFlags::ANY).context("prefix_stats lookup failed")? else {
+                continue;
+            };
+            let Ok(vb) = <[u8; 24]>::try_from(val.as_slice()) else {
+                continue;
+            };
+            out.push((PrefixKey::from_bytes(kb), PrefixStatsVal::from_bytes(vb)));
+        }
+        Ok(out)
     }
 
     pub fn get_stats(&self) -> Result<XdpStats> {
@@ -135,6 +170,13 @@ impl Drop for XdpFilter {
     fn drop(&mut self) {
         let _ = self.unload();
     }
+}
+
+fn unix_ns() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos() as u64
 }
 
 fn build_ringbuf(obj: &Object) -> Result<RingBuffer<'static>> {
