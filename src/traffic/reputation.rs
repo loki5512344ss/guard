@@ -33,6 +33,15 @@ impl IpReputation {
         self.scores.get(&ip).map(|v| *v).unwrap_or(0)
     }
 
+    /// Возвращает источники со скором не выше `threshold` (нарушители).
+    pub fn offenders_below(&self, threshold: i32) -> Vec<IpAddr> {
+        self.scores
+            .iter()
+            .filter(|entry| *entry.value() <= threshold)
+            .map(|entry| *entry.key())
+            .collect()
+    }
+
     pub fn is_trusted(&self, ip: IpAddr) -> bool {
         self.score(ip) > 50
     }
@@ -106,5 +115,24 @@ mod tests {
         let ip = IpAddr::V6(Ipv6Addr::LOCALHOST);
         rep.record_bad(ip);
         assert_eq!(rep.score(ip), -10);
+    }
+
+    #[test]
+    fn test_offenders_below_threshold() {
+        let rep = IpReputation::new();
+        let bad = v4([10, 0, 0, 1]);
+        let good = v4([10, 0, 0, 2]);
+        for _ in 0..6 {
+            rep.record_bad(bad);
+        }
+        rep.record_good(good);
+        let offenders = rep.offenders_below(-50);
+        assert_eq!(offenders, vec![bad]);
+    }
+
+    #[test]
+    fn test_offenders_empty_when_none_below() {
+        let rep = IpReputation::new();
+        assert!(rep.offenders_below(-50).is_empty());
     }
 }

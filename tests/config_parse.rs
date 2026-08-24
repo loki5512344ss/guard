@@ -61,3 +61,31 @@ fn rejects_invalid_whitelist_ip() {
     let result = Config::parse_str("whitelist = [\"10.0.0.999\"]");
     assert!(result.is_err());
 }
+
+#[test]
+fn detect_autoban_defaults_disabled() {
+    let config = Config::parse_str("").expect("empty config must parse");
+    assert!(!config.detect.autoban.enabled);
+    assert_eq!(config.detect.autoban.reputation_threshold, -50);
+}
+
+#[test]
+fn parses_detect_sections() {
+    let config = Config::parse_str(
+        r#"
+[detect.autoban]
+enabled = true
+reputation_threshold = -30
+
+[detect.alert]
+webhook_url = "https://hooks.example.test/rampart"
+"#,
+    )
+    .expect("detect sections must parse");
+    assert!(config.detect.autoban.enabled);
+    assert_eq!(config.detect.autoban.reputation_threshold, -30);
+    assert_eq!(
+        config.detect.alert.webhook_url.as_deref(),
+        Some("https://hooks.example.test/rampart")
+    );
+}

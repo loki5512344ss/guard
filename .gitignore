@@ -41,7 +41,7 @@ Thumbs.db
 .project
 .settings/
 .factorypath
-bin/
+/bin/
 
 # Reference projects (cloned for research)
 ref/

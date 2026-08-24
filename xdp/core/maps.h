@@ -45,6 +45,30 @@ struct {
     __type(value, struct throttle_entry);
 } udp_rate_limit SEC(".maps");
 
+// ── RST-challenge pending state (challenge reflected, awaiting proof) ──
+struct challenge_pending {
+    __u64 sent_at;   // ktime_ns of the reflected SYN-ACK
+    __u32 marker;    // our ISN (client may echo it as ack)
+    __u32 bad_ack;   // bogus ack sent (live client echoes it as RST seq)
+};
+
+// 🔗 RST-challenge: verified sources (liveness proven) — sliding TTL via
+// last_seen, LRU eviction as the hard cap
+struct {
+    __uint(type, BPF_MAP_TYPE_LRU_HASH);
+    __uint(max_entries, 65536);
+    __type(key, __u32);             // src_ip
+    __type(value, __u64);           // last_seen (ktime_ns)
+} challenge_verified SEC(".maps");
+
+// 🔗 RST-challenge: outstanding challenges keyed by flow 4-tuple
+struct {
+    __uint(type, BPF_MAP_TYPE_LRU_HASH);
+    __uint(max_entries, 16384);
+    __type(key, struct flow_key);
+    __type(value, struct challenge_pending);
+} challenge_pending SEC(".maps");
+
 // 🔗 Statistics (per-CPU, атомарные инкременты)
 #define STAT_TOTAL        0
 #define STAT_TCP          1
@@ -55,6 +79,9 @@ struct {
 #define STAT_DROP         6
 #define STAT_UDP          7
 #define STAT_RATE_LIMIT   8
+#define STAT_CHALLENGE_SENT     9
+#define STAT_CHALLENGE_VERIFIED 10
+#define STAT_CHALLENGE_FAILED   11
 
 struct {
     __uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);

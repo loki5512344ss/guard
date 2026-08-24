@@ -25,6 +25,9 @@ impl XdpFilter {
     }
 
     pub fn load(&mut self) -> Result<()> {
+        // Диагностика ДО загрузки: fail-fast на неподдерживаемом ядре/драйвере.
+        super::diagnostics::preflight(&self.interface)?;
+
         let bpf_obj = include_bytes!(concat!(env!("OUT_DIR"), "/universal_filter.o"));
         let obj = ObjectBuilder::default()
             .open_memory(bpf_obj)

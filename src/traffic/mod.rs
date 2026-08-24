@@ -3,6 +3,7 @@
 pub mod alert;
 pub mod detector;
 pub mod ewma;
+pub mod hook;
 pub mod prefix;
 pub mod profiler;
 pub mod reputation;

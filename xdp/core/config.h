@@ -33,4 +33,12 @@ static volatile const __u64 G_UDP_WINDOW_NS = 1000000000ULL;        // 1 sec
 static volatile const __u8 G_FEATURE_SYN_THROTTLE  = 1;
 static volatile const __u8 G_FEATURE_EVENTS        = 1;
 
+// ── RST-challenge (Oubliette liveness proof) ──
+// 0 = disabled: single branch, zero cost for legitimate traffic.
+// Secret is patched by the loader at attach time (default is a placeholder).
+static volatile const __u8  G_SYN_CHALLENGE_ENABLED = 0;
+static volatile const __u64 G_CHALLENGE_SECRET      = 0xA5A55A5A5A5AA5A5ULL;
+static volatile const __u32 G_CHALLENGE_TIMEOUT_MS  = 3000;           // pending TTL
+static volatile const __u64 G_CHALLENGE_VERIFIED_TTL_NS = 300000000000ULL; // 5 min
+
 #endif /* RAMPART_CONFIG_H */

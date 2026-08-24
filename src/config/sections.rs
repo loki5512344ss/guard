@@ -232,6 +232,42 @@ fn default_pow_difficulty() -> u8 {
 pub struct DetectConfig {
     #[serde(default)]
     pub prefix: DetectPrefixConfig,
+    #[serde(default)]
+    pub autoban: DetectAutobanConfig,
+    #[serde(default)]
+    pub alert: DetectAlertConfig,
+}
+
+/// Секция `[detect.autoban]`: авто-бан источников по репутации и сигналам
+/// детектора атак. Порог сравнивается со скором [`crate::traffic::reputation::IpReputation`],
+/// TTL берётся из `ban.ban_duration_secs`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct DetectAutobanConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_autoban_reputation_threshold")]
+    pub reputation_threshold: i32,
+}
+
+impl Default for DetectAutobanConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            reputation_threshold: default_autoban_reputation_threshold(),
+        }
+    }
+}
+
+fn default_autoban_reputation_threshold() -> i32 {
+    -50
+}
+
+/// Секция `[detect.alert]`: webhook-алерты на переходах состояния атаки
+/// («атака началась» / «атака закончилась»).
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct DetectAlertConfig {
+    #[serde(default)]
+    pub webhook_url: Option<String>,
 }
 
 /// Секция `[detect.prefix]`: subnet-level детектор распределённых атак.

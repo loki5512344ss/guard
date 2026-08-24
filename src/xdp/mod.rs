@@ -2,6 +2,11 @@
 mod stats;
 pub use stats::XdpStats;
 
+mod diagnostics;
+pub use diagnostics::{
+    AttachMode, EnvironmentReport, FilesystemProbe, KernelVersion, MIN_KERNEL, SystemProbe, driver_supports_native_xdp,
+};
+
 #[cfg(feature = "xdp")]
 mod filter;
 #[cfg(feature = "xdp")]
