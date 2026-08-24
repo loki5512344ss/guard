@@ -262,6 +262,7 @@ impl EnvironmentReport {
 ///
 /// # Errors
 /// См. [`EnvironmentReport::validate`].
+#[cfg(feature = "xdp")]
 pub(crate) fn preflight(interface: &str) -> Result<()> {
     let report = EnvironmentReport::collect(&FilesystemProbe, interface);
     let kernel = report

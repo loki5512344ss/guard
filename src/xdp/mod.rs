@@ -8,6 +8,11 @@ pub use diagnostics::{
 };
 
 #[cfg(feature = "xdp")]
+mod globals;
+#[cfg(feature = "xdp")]
+pub use globals::XdpGlobals;
+
+#[cfg(feature = "xdp")]
 mod filter;
 #[cfg(feature = "xdp")]
 pub use filter::XdpFilter;

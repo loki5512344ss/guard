@@ -1,3 +1,6 @@
+#[cfg(feature = "protocol-http")]
+pub mod http;
+
 use std::future::Future;
 use std::pin::Pin;
 use tokio::net::TcpStream;

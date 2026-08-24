@@ -89,3 +89,54 @@ webhook_url = "https://hooks.example.test/rampart"
         Some("https://hooks.example.test/rampart")
     );
 }
+
+#[test]
+fn xdp_section_defaults() {
+    let config = Config::parse_str("").expect("empty config must parse");
+    let xdp = &config.xdp;
+    assert_eq!(xdp.protected_port_start, 1);
+    assert_eq!(xdp.protected_port_end, 65535);
+    assert_eq!(xdp.udp_policy, "pass");
+    assert_eq!(xdp.udp_rate_hit_count, 100);
+    assert_eq!(xdp.udp_rate_window_ms, 1000);
+    assert!(!xdp.syn_challenge_enabled);
+    assert!(xdp.challenge_secret_hex.is_none());
+    assert_eq!(xdp.challenge_timeout_ms, 3000);
+    assert!(xdp.throttle_enabled);
+    assert!(xdp.events_enabled);
+}
+
+#[test]
+fn parses_xdp_section() {
+    let config = Config::parse_str(
+        r#"
+[xdp]
+enabled = true
+interface = "ens3"
+protected_port_start = 25560
+protected_port_end = 25600
+udp_policy = "drop"
+udp_rate_hit_count = 250
+udp_rate_window_ms = 500
+syn_challenge_enabled = true
+challenge_secret_hex = "dead_beef_dead_beef"
+challenge_timeout_ms = 1500
+throttle_enabled = false
+events_enabled = false
+"#,
+    )
+    .expect("[xdp] section must parse");
+    let xdp = &config.xdp;
+    assert!(xdp.enabled);
+    assert_eq!(xdp.interface, "ens3");
+    assert_eq!(xdp.protected_port_start, 25560);
+    assert_eq!(xdp.protected_port_end, 25600);
+    assert_eq!(xdp.udp_policy, "drop");
+    assert_eq!(xdp.udp_rate_hit_count, 250);
+    assert_eq!(xdp.udp_rate_window_ms, 500);
+    assert!(xdp.syn_challenge_enabled);
+    assert_eq!(xdp.challenge_secret_hex.as_deref(), Some("dead_beef_dead_beef"));
+    assert_eq!(xdp.challenge_timeout_ms, 1500);
+    assert!(!xdp.throttle_enabled);
+    assert!(!xdp.events_enabled);
+}
