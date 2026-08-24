@@ -8,4 +8,5 @@ pub mod metrics;
 pub mod protocol;
 pub mod store;
 pub mod traffic;
+pub mod tui;
 pub mod xdp;
