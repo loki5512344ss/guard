@@ -6,8 +6,11 @@
 // after loader writes to .rodata section
 
 // ── Port range ──
-static volatile const __u16 G_START_PORT = 25565;
-static volatile const __u16 G_END_PORT   = 25570;
+// Protected port range: packets to ports OUTSIDE this range bypass the
+// filter (XDP_PASS before any counting/filtering). Default protects all
+// TCP/UDP ports; narrow it via loader patching for dedicated-edge setups.
+static volatile const __u16 G_START_PORT = 1;
+static volatile const __u16 G_END_PORT   = 65535;
 
 // ── SYN throttle ──
 static volatile const __u32 G_SYN_HIT_COUNT      = 10;    // max SYNs / window
