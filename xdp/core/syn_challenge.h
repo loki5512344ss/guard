@@ -96,8 +96,14 @@ static __always_inline void chal_build_synack(struct xdp_md *ctx,
         ipw[8] = s0;
         ipw[9] = s1;
         ((__u8 *)ipw)[8] = 64; // TTL
+        // tot_len must match the trimmed frame: 20 (IP) + 20 (TCP).
+        // Without this the peer sees "truncated IP" and drops the challenge.
+        ipw[1] = bpf_htons(sizeof(struct iphdr) + sizeof(struct tcphdr));
         ipw[5] = 0;            // checksum placeholder
         ipw[5] = chal_csum_fold(chal_sum10(ipw));
+    } else {
+        ((struct ipv6hdr *)l3)->payload_len =
+            bpf_htons(sizeof(struct tcphdr));
     }
 
     // TCP header: swap ports, inject secret-derived seq/ack, SYN|ACK
@@ -105,10 +111,12 @@ static __always_inline void chal_build_synack(struct xdp_md *ctx,
     __u16 ndport = tcpw[0];               // new dest = old source
     tcpw[0] = nsport;
     tcpw[1] = ndport;
-    tcpw[2] = (__u16)(marker >> 16);
-    tcpw[3] = (__u16)marker;
-    tcpw[4] = (__u16)(bad_ack >> 16);
-    tcpw[5] = (__u16)bad_ack;
+    // seq/ack are written per-halfword with htons: tcpw is a view over
+    // network-order memory, raw host-order stores would swap halfword bytes.
+    tcpw[2] = bpf_htons((__u16)(marker >> 16));
+    tcpw[3] = bpf_htons((__u16)(marker & 0xFFFF));
+    tcpw[4] = bpf_htons((__u16)(bad_ack >> 16));
+    tcpw[5] = bpf_htons((__u16)(bad_ack & 0xFFFF));
     tcpw[6] = bpf_htons(0x5012);          // doff=5, flags SYN|ACK
     tcpw[7] = bpf_htons(0xFFFF);          // window
     tcpw[8] = 0;                          // checksum placeholder
