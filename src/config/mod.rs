@@ -2,8 +2,8 @@
 mod sections;
 
 pub use sections::{
-    BackendConfig, BanConfig, BindConfig, DetectConfig, DetectPrefixConfig, LimitsConfig, LoggingConfig, MetricsConfig,
-    PowConfig, StoreConfig, WorkerConfig, XdpConfig,
+    BackendConfig, BanConfig, BindConfig, DetectAlertConfig, DetectAutobanConfig, DetectConfig, DetectPrefixConfig,
+    LimitsConfig, LoggingConfig, MetricsConfig, PowConfig, StoreConfig, WorkerConfig, XdpConfig,
 };
 
 use serde::Deserialize;

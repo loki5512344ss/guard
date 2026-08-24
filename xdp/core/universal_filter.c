@@ -27,6 +27,7 @@
 #include "config.h"
 #include "stats.h"
 #include "prefix_stats.h"
+#include "syn_challenge.h"
 #include "../hooks/hook_api.h"
 
 char __license[] SEC("license") = "GPL";
@@ -299,6 +300,15 @@ int rampart_universal_filter(struct xdp_md *ctx)
             return XDP_DROP;
         }
 
+        // ── RST-challenge: unverified source must prove liveness first ──
+        // (after throttle/blacklist, mirroring prefix_stats ordering)
+        if (G_SYN_CHALLENGE_ENABLED) {
+            int cv = chal_on_syn(ctx, eth, (void *)(eth + 1), is_ipv6,
+                                 tcp, &flow, now);
+            if (cv != CHAL_CONTINUE)
+                return cv;
+        }
+
         // Count SYN only after throttle passed (don't count throttled SYNs)
         update_prefix_stats(&pkey, 1, now);
 
@@ -323,6 +333,13 @@ int rampart_universal_filter(struct xdp_md *ctx)
     // ── Connection tracking lookup ──
     // pkt_count: all non-SYN TCP that survived blacklist/bypass/throttle
     update_prefix_stats(&pkey, 0, now);
+
+    // ── RST-challenge proof: match a pending challenge before conntrack ──
+    if (G_SYN_CHALLENGE_ENABLED && tcp->rst) {
+        int cv = chal_on_rst(tcp, &flow, now);
+        if (cv != CHAL_CONTINUE)
+            return cv;
+    }
 
     struct conntrack_entry *conn = bpf_map_lookup_elem(&conntrack_map, &flow);
     if (!conn) {

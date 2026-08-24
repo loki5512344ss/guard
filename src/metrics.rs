@@ -1,4 +1,6 @@
-use prometheus::{Encoder, IntCounterVec, IntGauge, register_int_counter_vec, register_int_gauge};
+use prometheus::{
+    Encoder, IntCounter, IntCounterVec, IntGauge, register_int_counter, register_int_counter_vec, register_int_gauge,
+};
 use std::sync::LazyLock;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
@@ -36,6 +38,31 @@ pub static SUBNET_VERDICTS: LazyLock<IntCounterVec> = LazyLock::new(|| {
         &["verdict"]
     )
     .expect("SUBNET_VERDICTS")
+});
+
+pub static AUTO_BANS_TOTAL: LazyLock<IntCounterVec> = LazyLock::new(|| {
+    register_int_counter_vec!(
+        "rampart_auto_bans_total",
+        "Auto-bans issued by Traffic Intelligence",
+        &["reason"]
+    )
+    .expect("AUTO_BANS_TOTAL")
+});
+
+pub static INTEL_RATE_LIMIT_DROPS_TOTAL: LazyLock<IntCounter> = LazyLock::new(|| {
+    register_int_counter!(
+        "rampart_intel_rate_limit_drops_total",
+        "Connections dropped by rate limit"
+    )
+    .expect("INTEL_RATE_LIMIT_DROPS_TOTAL")
+});
+
+pub static INTEL_CPS: LazyLock<IntGauge> =
+    LazyLock::new(|| register_int_gauge!("rampart_intel_cps", "New connections per second window").expect("INTEL_CPS"));
+
+pub static INTEL_ALERTS_TOTAL: LazyLock<IntCounter> = LazyLock::new(|| {
+    register_int_counter!("rampart_intel_alerts_total", "Attack state-transition alerts emitted")
+        .expect("INTEL_ALERTS_TOTAL")
 });
 
 /// Отдаёт Prometheus-метрики по голому HTTP/0.9-совместимому ответу.

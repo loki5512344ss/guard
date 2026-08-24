@@ -8,7 +8,8 @@ pub enum AttackStatus {
 }
 
 pub struct AttackDetector {
-    profiler: TrafficProfiler,
+    pps_profiler: TrafficProfiler,
+    cps_profiler: TrafficProfiler,
     consecutive_anomalies: u32,
 }
 
@@ -21,14 +22,21 @@ impl Default for AttackDetector {
 impl AttackDetector {
     pub fn new() -> Self {
         Self {
-            profiler: TrafficProfiler::new(),
+            pps_profiler: TrafficProfiler::new(),
+            cps_profiler: TrafficProfiler::new(),
             consecutive_anomalies: 0,
         }
     }
 
-    pub fn analyze(&mut self, pps: f64) -> AttackStatus {
-        self.profiler.record(pps);
-        let score = self.profiler.anomaly_score(pps);
+    /// Анализирует окно метрик (пакеты/с и новые соединения/с) относительно
+    /// накопленных профилей. Аномалией считается всплеск любой из метрик.
+    pub fn analyze(&mut self, pps: f64, cps: f64) -> AttackStatus {
+        self.pps_profiler.record(pps);
+        self.cps_profiler.record(cps);
+        let score = self
+            .pps_profiler
+            .anomaly_score(pps)
+            .max(self.cps_profiler.anomaly_score(cps));
 
         if score > 3.0 {
             self.consecutive_anomalies += 1;
@@ -54,40 +62,49 @@ mod tests {
     fn test_attack_status_normal() {
         let mut d = AttackDetector::new();
         for _ in 0..10 {
-            d.analyze(100.0);
+            d.analyze(100.0, 10.0);
         }
-        assert_eq!(d.analyze(100.0), AttackStatus::Normal);
+        assert_eq!(d.analyze(100.0, 10.0), AttackStatus::Normal);
     }
 
     #[test]
-    fn test_attack_status_suspicious() {
+    fn test_attack_status_suspicious_pps_spike() {
         let mut d = AttackDetector::new();
         for _ in 0..10 {
-            d.analyze(1.0);
+            d.analyze(1.0, 1.0);
         }
-        assert_eq!(d.analyze(5.0), AttackStatus::Suspicious);
+        assert_eq!(d.analyze(5.0, 1.0), AttackStatus::Suspicious);
+    }
+
+    #[test]
+    fn test_attack_status_suspicious_cps_spike() {
+        let mut d = AttackDetector::new();
+        for _ in 0..10 {
+            d.analyze(1.0, 1.0);
+        }
+        assert_eq!(d.analyze(1.0, 5.0), AttackStatus::Suspicious);
     }
 
     #[test]
     fn test_attack_status_under_attack() {
         let mut d = AttackDetector::new();
         for _ in 0..10 {
-            d.analyze(1.0);
+            d.analyze(1.0, 1.0);
         }
-        d.analyze(10_000.0);
-        d.analyze(10_000.0);
-        assert_eq!(d.analyze(10_000.0), AttackStatus::UnderAttack);
+        d.analyze(10_000.0, 100.0);
+        d.analyze(10_000.0, 100.0);
+        assert_eq!(d.analyze(10_000.0, 100.0), AttackStatus::UnderAttack);
     }
 
     #[test]
     fn test_consecutive_resets_on_normal() {
         let mut d = AttackDetector::new();
         for _ in 0..10 {
-            d.analyze(1.0);
+            d.analyze(1.0, 1.0);
         }
-        d.analyze(100.0);
-        d.analyze(100.0);
-        d.analyze(1.0);
-        assert_eq!(d.analyze(1.0), AttackStatus::Normal);
+        d.analyze(100.0, 10.0);
+        d.analyze(100.0, 10.0);
+        d.analyze(1.0, 1.0);
+        assert_eq!(d.analyze(1.0, 1.0), AttackStatus::Normal);
     }
 }

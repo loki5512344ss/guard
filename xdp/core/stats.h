@@ -20,6 +20,9 @@ static __always_inline void inc_whitelist(void)    { inc_stat(STAT_WHITELIST); }
 static __always_inline void inc_blacklist(void)    { inc_stat(STAT_BLACKLIST); }
 static __always_inline void inc_syn_throttle(void) { inc_stat(STAT_SYN_THROTTLE); }
 static __always_inline void inc_rate_limit(void)   { inc_stat(STAT_RATE_LIMIT); }
+static __always_inline void inc_chal_sent(void)     { inc_stat(STAT_CHALLENGE_SENT); }
+static __always_inline void inc_chal_verified(void) { inc_stat(STAT_CHALLENGE_VERIFIED); }
+static __always_inline void inc_chal_failed(void)   { inc_stat(STAT_CHALLENGE_FAILED); }
 static __always_inline void inc_pass(void)         { inc_stat(STAT_PASS); }
 static __always_inline void inc_drop(void)         { inc_stat(STAT_DROP); }
 

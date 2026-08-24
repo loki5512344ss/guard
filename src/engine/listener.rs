@@ -2,6 +2,7 @@
 
 use crate::config::Config;
 use crate::engine::tunnel::Gateway;
+use crate::traffic::hook::TrafficHook;
 use socket2::{Domain, Socket, Type};
 use std::sync::Arc;
 use tokio::net::TcpListener;
@@ -12,8 +13,12 @@ use tokio::sync::watch;
 /// # Errors
 /// Возвращает ошибку при невозможности забиндить адрес или падении одного
 /// из accept-loop'ов.
-pub async fn run(config: Arc<Config>, gateway: Arc<Gateway>, shutdown: watch::Receiver<bool>) -> anyhow::Result<()> {
-    let _ = &config;
+pub async fn run(
+    config: Arc<Config>,
+    gateway: Arc<Gateway>,
+    hook: Arc<TrafficHook>,
+    shutdown: watch::Receiver<bool>,
+) -> anyhow::Result<()> {
     let addr: std::net::SocketAddr = format!("{}:{}", config.bind.address, config.bind.port).parse()?;
     let workers = config.workers.count.max(1);
 
@@ -23,6 +28,7 @@ pub async fn run(config: Arc<Config>, gateway: Arc<Gateway>, shutdown: watch::Re
         handles.push(tokio::spawn(accept_loop(
             listener,
             Arc::clone(&gateway),
+            Arc::clone(&hook),
             shutdown.clone(),
         )));
     }
@@ -43,7 +49,12 @@ fn build_listener(addr: std::net::SocketAddr) -> anyhow::Result<TcpListener> {
     Ok(TcpListener::from_std(socket.into())?)
 }
 
-async fn accept_loop(listener: TcpListener, gateway: Arc<Gateway>, mut shutdown: watch::Receiver<bool>) {
+async fn accept_loop(
+    listener: TcpListener,
+    gateway: Arc<Gateway>,
+    hook: Arc<TrafficHook>,
+    mut shutdown: watch::Receiver<bool>,
+) {
     loop {
         tokio::select! {
             biased;
@@ -62,10 +73,14 @@ async fn accept_loop(listener: TcpListener, gateway: Arc<Gateway>, mut shutdown:
                     }
                 };
                 let gateway = Arc::clone(&gateway);
+                let hook = Arc::clone(&hook);
                 tokio::spawn(async move {
+                    // Hot path Traffic Intelligence: только атомики и DashMap.
+                    hook.on_accept();
                     if let Err(e) = gateway.handle(stream, peer_addr).await {
                         tracing::debug!("connection from {peer_addr}: {e}");
                     }
+                    hook.on_connection_end(peer_addr.ip());
                 });
             }
         }
