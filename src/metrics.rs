@@ -29,6 +29,15 @@ pub static ATTACK_STATUS: LazyLock<IntGauge> = LazyLock::new(|| {
     .expect("ATTACK_STATUS")
 });
 
+pub static SUBNET_VERDICTS: LazyLock<IntCounterVec> = LazyLock::new(|| {
+    register_int_counter_vec!(
+        "rampart_subnet_verdicts_total",
+        "Subnet detector verdicts",
+        &["verdict"]
+    )
+    .expect("SUBNET_VERDICTS")
+});
+
 /// Отдаёт Prometheus-метрики по голому HTTP/0.9-совместимому ответу.
 pub async fn run_metrics_server(addr: &str) {
     let listener = match TcpListener::bind(addr).await {

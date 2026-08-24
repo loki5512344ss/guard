@@ -26,6 +26,7 @@
 #include "maps.h"
 #include "config.h"
 #include "stats.h"
+#include "prefix_stats.h"
 #include "../hooks/hook_api.h"
 
 char __license[] SEC("license") = "GPL";
@@ -265,6 +266,10 @@ int rampart_universal_filter(struct xdp_md *ctx)
     if ((void *)data + sizeof(struct ethhdr) + ip_hdr_len + tcp_hdr_len > data_end)
         return XDP_DROP;
 
+    // ── Per-prefix stats key (/24; built once, after blacklist/bypass drops) ──
+    struct prefix_key pkey;
+    prefix_key_from_v4(&pkey, src_ip);
+
     // Compute payload pointers
     __u8 *tcp_payload = (__u8 *)tcp + tcp_hdr_len;
     __u8 *tcp_payload_end = (__u8 *)data_end;
@@ -294,6 +299,9 @@ int rampart_universal_filter(struct xdp_md *ctx)
             return XDP_DROP;
         }
 
+        // Count SYN only after throttle passed (don't count throttled SYNs)
+        update_prefix_stats(&pkey, 1, now);
+
         // Create conntrack entry for new connection
         struct conntrack_entry ce = {};
         ce.state = STATE_SYN_RECEIVED;
@@ -313,6 +321,9 @@ int rampart_universal_filter(struct xdp_md *ctx)
     }
 
     // ── Connection tracking lookup ──
+    // pkt_count: all non-SYN TCP that survived blacklist/bypass/throttle
+    update_prefix_stats(&pkey, 0, now);
+
     struct conntrack_entry *conn = bpf_map_lookup_elem(&conntrack_map, &flow);
     if (!conn) {
         // Unknown connection — drop

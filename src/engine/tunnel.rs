@@ -2,6 +2,7 @@
 
 use crate::config::Config;
 use crate::engine::challenge::{DifficultyAdjuster, enforce as enforce_pow};
+use crate::engine::subnet_tracker::SubnetTracker;
 use crate::filter::blacklist::Blacklist;
 use crate::filter::rate_limit::RateLimiter;
 use crate::metrics;
@@ -30,6 +31,7 @@ pub struct Gateway {
     pub clickhouse: Option<Arc<TokioMutex<ClickHouseWriter>>>,
     pub allowed_1s: Arc<AtomicU64>,
     pub registry: Arc<ProtocolRegistry>,
+    pub subnet_tracker: Option<Arc<SubnetTracker>>,
     upstream_cursor: AtomicUsize,
 }
 
@@ -46,6 +48,7 @@ impl Gateway {
         clickhouse: Option<Arc<TokioMutex<ClickHouseWriter>>>,
         allowed_1s: Arc<AtomicU64>,
         registry: Arc<ProtocolRegistry>,
+        subnet_tracker: Option<Arc<SubnetTracker>>,
     ) -> Self {
         Self {
             config,
@@ -58,6 +61,7 @@ impl Gateway {
             clickhouse,
             allowed_1s,
             registry,
+            subnet_tracker,
             upstream_cursor: AtomicUsize::new(0),
         }
     }
@@ -69,6 +73,10 @@ impl Gateway {
     /// клиента ошибкой не считаются.
     pub async fn handle(&self, mut client: TcpStream, peer_addr: std::net::SocketAddr) -> anyhow::Result<()> {
         let peer_ip = peer_addr.ip();
+
+        if let Some(tracker) = &self.subnet_tracker {
+            tracker.record_connection(peer_ip);
+        }
 
         if self.blacklist.is_blocked(peer_ip) {
             metrics::CONNECTIONS_TOTAL.with_label_values(&["blocked"]).inc();
