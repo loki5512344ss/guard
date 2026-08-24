@@ -1,10 +1,11 @@
 use anyhow::{Context, Result, bail};
-use libbpf_rs::{MapCore, MapFlags, Object, ObjectBuilder, RingBuffer, RingBufferBuilder, Xdp, XdpFlags};
+use libbpf_rs::{MapCore, MapFlags, Object, ObjectBuilder, OpenObject, RingBuffer, RingBufferBuilder, Xdp, XdpFlags};
 use std::net::IpAddr;
 use std::net::Ipv4Addr;
 use std::os::unix::io::AsFd;
 
 use super::XdpStats;
+use super::globals::{RODATA_MAP_NAME, XdpGlobals};
 use crate::traffic::prefix::{PrefixKey, PrefixStatsVal};
 
 pub struct XdpFilter {
@@ -12,6 +13,7 @@ pub struct XdpFilter {
     ringbuf: Option<RingBuffer<'static>>,
     ifindex: i32,
     interface: String,
+    globals: XdpGlobals,
 }
 
 impl XdpFilter {
@@ -21,7 +23,13 @@ impl XdpFilter {
             ringbuf: None,
             ifindex: 0,
             interface: interface.to_string(),
+            globals: XdpGlobals::default(),
         }
+    }
+
+    /// Задаёт глобалы для патчинга `.rodata` при следующем `load()`.
+    pub fn set_globals(&mut self, globals: XdpGlobals) {
+        self.globals = globals;
     }
 
     pub fn load(&mut self) -> Result<()> {
@@ -29,11 +37,11 @@ impl XdpFilter {
         super::diagnostics::preflight(&self.interface)?;
 
         let bpf_obj = include_bytes!(concat!(env!("OUT_DIR"), "/universal_filter.o"));
-        let obj = ObjectBuilder::default()
+        let mut open_obj = ObjectBuilder::default()
             .open_memory(bpf_obj)
-            .context("Failed to open XDP object")?
-            .load()
-            .context("Failed to load XDP object (verifier error?)")?;
+            .context("Failed to open XDP object")?;
+        patch_rodata(&mut open_obj, &self.globals)?;
+        let obj = open_obj.load().context("Failed to load XDP object (verifier error?)")?;
 
         let ifindex = unsafe { libc::if_nametoindex(self.interface.as_ptr() as *const libc::c_char) };
         if ifindex == 0 {
@@ -180,6 +188,17 @@ fn unix_ns() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_nanos() as u64
+}
+
+/// Патчит карту `rampart_.rodata` (volatile const глобалы) ДО загрузки объекта.
+fn patch_rodata(open_obj: &mut OpenObject, globals: &XdpGlobals) -> Result<()> {
+    let image = globals.build_rodata_image();
+    let mut map = open_obj
+        .maps_mut()
+        .find(|m| m.name() == RODATA_MAP_NAME)
+        .with_context(|| format!("map '{RODATA_MAP_NAME}' not found in XDP object"))?;
+    map.set_initial_value(&image)
+        .with_context(|| format!("failed to set initial value of '{RODATA_MAP_NAME}'"))
 }
 
 fn build_ringbuf(obj: &Object) -> Result<RingBuffer<'static>> {

@@ -14,6 +14,8 @@ use rampart::traffic::detector::{AttackDetector, AttackStatus};
 use rampart::traffic::hook::TrafficHook;
 use rampart::traffic::reputation::IpReputation;
 use rampart::xdp::XdpFilter;
+#[cfg(feature = "xdp")]
+use rampart::xdp::XdpGlobals;
 use std::collections::HashSet;
 use std::net::IpAddr;
 use std::sync::Arc;
@@ -33,19 +35,30 @@ fn attack_status_value(status: AttackStatus) -> i64 {
 
 /// Собирает реестр протоколов из скомпилированных реализаций.
 ///
-/// В ядре реализаций нет: `protocol-http` — зарезервированная пустая feature,
-/// показывающая модель plugin-by-feature. Внешние крейты регистрируют свои
-/// обработчики в этом месте.
-#[allow(unused_mut)]
-fn build_registry() -> ProtocolRegistry {
-    let mut registry = ProtocolRegistry::new();
+/// Обработчики поставляются фичами: `protocol-http` регистрирует
+/// HTTP/1.1-обработчик с политикой из секции `[protocol.http]`.
+/// Внешние крейты регистрируют свои обработчики в этом же месте.
+fn build_registry(config: &Config) -> ProtocolRegistry {
     #[cfg(feature = "protocol-http")]
-    register_http(&mut registry);
-    registry
+    {
+        let mut registry = ProtocolRegistry::new();
+        register_http(&mut registry, config);
+        registry
+    }
+    #[cfg(not(feature = "protocol-http"))]
+    {
+        let _ = config;
+        ProtocolRegistry::new()
+    }
 }
 
 #[cfg(feature = "protocol-http")]
-fn register_http(_registry: &mut ProtocolRegistry) {}
+fn register_http(registry: &mut ProtocolRegistry, config: &Config) {
+    registry.register(Box::new(rampart::protocol::http::HttpProtocolHandler::new(
+        &config.protocol.http,
+        &config.backend.upstreams,
+    )));
+}
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -53,16 +66,17 @@ async fn main() -> anyhow::Result<()> {
         .with_env_filter(EnvFilter::from_default_env().add_directive("rampart=info".parse()?))
         .init();
 
-    let registry = Arc::new(build_registry());
+    let config_path = std::env::var("RAMPART_CONFIG").unwrap_or_else(|_| "/etc/rampart/config.toml".to_string());
+    let config = Arc::new(Config::from_file(&config_path)?);
+
+    let registry = Arc::new(build_registry(&config));
     if registry.is_empty() {
         anyhow::bail!(
-            "no protocol plugins compiled; build with --features protocol-http \
+            "no protocol plugins compiled; available feature flags: protocol-http, \
+             store-redis, geoip, xdp, io-uring. Build with --features protocol-http \
              or link an external ProtocolHandler implementation"
         );
     }
-
-    let config_path = std::env::var("RAMPART_CONFIG").unwrap_or_else(|_| "/etc/rampart/config.toml".to_string());
-    let config = Arc::new(Config::from_file(&config_path)?);
     let whitelist = build_whitelist(&config)?;
 
     let rate_limiter = Arc::new(RateLimiter::new(
@@ -239,7 +253,12 @@ fn start_xdp(
 
     let filter = XdpFilter::new(&config.xdp.interface);
     let shared = Arc::new(Mutex::new(filter));
-    shared.lock().expect("xdp lock poisoned").load()?;
+    {
+        let mut guard = shared.lock().expect("xdp lock poisoned");
+        let globals = XdpGlobals::from_config(&config.xdp)?;
+        guard.set_globals(globals);
+        guard.load()?;
+    }
     let xdp_metrics = XdpMetrics::register()?;
 
     let sd = shutdown_rx.clone();

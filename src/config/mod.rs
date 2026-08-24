@@ -5,6 +5,8 @@ pub use sections::{
     BackendConfig, BanConfig, BindConfig, DetectAlertConfig, DetectAutobanConfig, DetectConfig, DetectPrefixConfig,
     LimitsConfig, LoggingConfig, MetricsConfig, PowConfig, StoreConfig, WorkerConfig, XdpConfig,
 };
+#[cfg(feature = "protocol-http")]
+pub use sections::{HttpProtocolConfig, ProtocolConfig};
 
 use serde::Deserialize;
 use std::fs;
@@ -33,6 +35,9 @@ pub struct Config {
     pub pow: PowConfig,
     #[serde(default)]
     pub detect: DetectConfig,
+    #[cfg(feature = "protocol-http")]
+    #[serde(default)]
+    pub protocol: ProtocolConfig,
     #[serde(default)]
     pub whitelist: Vec<String>,
 }
@@ -74,6 +79,15 @@ impl Config {
         }
         if self.detect.prefix.enabled && self.detect.prefix.syn_threshold == 0 {
             anyhow::bail!("detect.prefix.syn_threshold must be positive when enabled");
+        }
+        #[cfg(feature = "protocol-http")]
+        {
+            if self.protocol.http.max_header_bytes == 0 {
+                anyhow::bail!("protocol.http.max_header_bytes must be positive");
+            }
+            if self.protocol.http.timeout_secs == 0 {
+                anyhow::bail!("protocol.http.timeout_secs must be positive");
+            }
         }
         Ok(())
     }

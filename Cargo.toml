@@ -37,8 +37,8 @@ store-redis = ["dep:redis"]
 geoip = ["dep:maxminddb"]
 xdp = ["dep:libbpf-rs", "dep:libc"]
 io-uring = ["dep:tokio-splice"]
-# Резерв под реализацию HTTP-протокольного обработчика (модель plugin-by-feature).
-# Реализаций пока нет: реестр протоколов пуст и edge-нода требует явного флага.
+# HTTP/1.1 protocol handler: парсинг request-head, verdict Allow/Reject,
+# туннелирование на upstream (см. src/protocol/http/ и [protocol.http] в конфиге).
 protocol-http = []
 
 [dependencies]

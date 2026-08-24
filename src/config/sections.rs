@@ -143,6 +143,28 @@ pub struct XdpConfig {
     pub enabled: bool,
     #[serde(default = "default_xdp_interface")]
     pub interface: String,
+    #[serde(default = "default_xdp_port_start")]
+    pub protected_port_start: u16,
+    #[serde(default = "default_xdp_port_end")]
+    pub protected_port_end: u16,
+    /// "pass" | "drop" | "rate-limit" → G_UDP_POLICY.
+    #[serde(default = "default_xdp_udp_policy")]
+    pub udp_policy: String,
+    #[serde(default = "default_xdp_udp_hit_count")]
+    pub udp_rate_hit_count: u32,
+    #[serde(default = "default_xdp_udp_window_ms")]
+    pub udp_rate_window_ms: u64,
+    #[serde(default)]
+    pub syn_challenge_enabled: bool,
+    /// 128-битный hex (16 символов) для G_CHALLENGE_SECRET; None = плейсхолдер из config.h.
+    #[serde(default)]
+    pub challenge_secret_hex: Option<String>,
+    #[serde(default = "default_xdp_challenge_timeout_ms")]
+    pub challenge_timeout_ms: u32,
+    #[serde(default = "default_xdp_throttle_enabled")]
+    pub throttle_enabled: bool,
+    #[serde(default = "default_xdp_events_enabled")]
+    pub events_enabled: bool,
 }
 
 impl Default for XdpConfig {
@@ -150,12 +172,46 @@ impl Default for XdpConfig {
         Self {
             enabled: false,
             interface: default_xdp_interface(),
+            protected_port_start: default_xdp_port_start(),
+            protected_port_end: default_xdp_port_end(),
+            udp_policy: default_xdp_udp_policy(),
+            udp_rate_hit_count: default_xdp_udp_hit_count(),
+            udp_rate_window_ms: default_xdp_udp_window_ms(),
+            syn_challenge_enabled: false,
+            challenge_secret_hex: None,
+            challenge_timeout_ms: default_xdp_challenge_timeout_ms(),
+            throttle_enabled: default_xdp_throttle_enabled(),
+            events_enabled: default_xdp_events_enabled(),
         }
     }
 }
 
 fn default_xdp_interface() -> String {
     "eth0".to_string()
+}
+fn default_xdp_port_start() -> u16 {
+    1
+}
+fn default_xdp_port_end() -> u16 {
+    65535
+}
+fn default_xdp_udp_policy() -> String {
+    "pass".to_string()
+}
+fn default_xdp_udp_hit_count() -> u32 {
+    100
+}
+fn default_xdp_udp_window_ms() -> u64 {
+    1000
+}
+fn default_xdp_challenge_timeout_ms() -> u32 {
+    3000
+}
+fn default_xdp_throttle_enabled() -> bool {
+    true
+}
+fn default_xdp_events_enabled() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -302,4 +358,47 @@ fn default_prefix_window_secs() -> u64 {
 }
 fn default_prefix_min_unique_sources() -> u64 {
     16
+}
+
+/// Секция `[protocol]`: протокольные обработчики (plugin-by-feature).
+#[cfg(feature = "protocol-http")]
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct ProtocolConfig {
+    #[serde(default)]
+    pub http: HttpProtocolConfig,
+}
+
+/// Секция `[protocol.http]`: политика HTTP/1.1-обработчика на edge-ноде.
+#[cfg(feature = "protocol-http")]
+#[derive(Debug, Clone, Deserialize)]
+pub struct HttpProtocolConfig {
+    #[serde(default = "default_http_max_header_bytes")]
+    pub max_header_bytes: usize,
+    #[serde(default = "default_http_timeout_secs")]
+    pub timeout_secs: u64,
+    #[serde(default)]
+    pub blocked_paths: Vec<String>,
+    #[serde(default)]
+    pub require_user_agent: bool,
+}
+
+#[cfg(feature = "protocol-http")]
+impl Default for HttpProtocolConfig {
+    fn default() -> Self {
+        Self {
+            max_header_bytes: default_http_max_header_bytes(),
+            timeout_secs: default_http_timeout_secs(),
+            blocked_paths: Vec::new(),
+            require_user_agent: false,
+        }
+    }
+}
+
+#[cfg(feature = "protocol-http")]
+fn default_http_max_header_bytes() -> usize {
+    8192
+}
+#[cfg(feature = "protocol-http")]
+fn default_http_timeout_secs() -> u64 {
+    5
 }
