@@ -5,7 +5,9 @@ use axum::{
     routing::{get, post},
 };
 use dashmap::DashMap;
-use rampart::manager::{AppState, api, auth, sync};
+#[cfg(feature = "store-redis")]
+use rampart::manager::sync;
+use rampart::manager::{AppState, api, auth};
 use std::sync::Arc;
 use tower_http::cors::CorsLayer;
 use tracing_subscriber::EnvFilter;
@@ -16,7 +18,15 @@ async fn main() -> anyhow::Result<()> {
         .with_env_filter(EnvFilter::from_default_env().add_directive("rampart=info".parse()?))
         .init();
 
+    // Manager живёт исключительно на redis-хранилище: без фичи стартовать
+    // нечего — fail-fast вместо полумёртвого API (features additive, TODO SOLID D).
+    if !cfg!(feature = "store-redis") {
+        anyhow::bail!("rampart-manager requires a redis state store: built without store-redis feature");
+    }
+
+    #[cfg(feature = "store-redis")]
     let redis_url = std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379/0".to_string());
+    #[cfg(feature = "store-redis")]
     let redis_client = redis::Client::open(redis_url)?;
 
     let jwt_secret = std::env::var("JWT_SECRET").map_err(|_| anyhow::anyhow!("JWT_SECRET must be set"))?;
@@ -35,6 +45,7 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let state = Arc::new(AppState {
+        #[cfg(feature = "store-redis")]
         redis_client,
         jwt_secret,
         jwt_audience,
@@ -43,20 +54,25 @@ async fn main() -> anyhow::Result<()> {
         login_limiter: DashMap::new(),
     });
 
+    #[cfg(feature = "store-redis")]
     tokio::spawn(sync::heartbeat::start_heartbeat_check(state.clone()));
 
     let public = Router::new()
         .route("/api/v1/health", get(api::inventory::health::health_check))
         .route("/api/v1/auth/login", post(api::auth::login));
 
-    let protected = Router::new()
+    // Redis-зависимые маршруты существуют только вместе с фичей; сам manager
+    // без неё bail'ит выше, поэтому 501-заглушки были бы недостижимым кодом.
+    let protected = Router::new();
+    #[cfg(feature = "store-redis")]
+    let protected = protected
         .route("/api/v1/servers", get(api::inventory::servers::list_servers))
         .route(
             "/api/v1/blacklist",
             get(api::blacklist::list_blacklist).post(api::blacklist::add_blacklist),
         )
-        .route("/api/v1/nodes", get(api::inventory::nodes::list_nodes))
-        .route_layer(middleware::from_fn(auth::auth_middleware));
+        .route("/api/v1/nodes", get(api::inventory::nodes::list_nodes));
+    let protected = protected.route_layer(middleware::from_fn(auth::auth_middleware));
 
     let cors = match std::env::var("CORS_ORIGIN") {
         Ok(origin) if origin.is_empty() || origin == "*" => CorsLayer::new().allow_origin(tower_http::cors::Any),

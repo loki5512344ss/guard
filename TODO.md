@@ -120,8 +120,11 @@ guard/
       исправлены, d6bcae5).
 - [x] Rust loader (`src/xdp/filter/`): open/load/attach, patch глобалов G_* из config.toml
       (src/xdp/globals.rs), CString-safe if_nametoindex, реальный detach по fd прогрессы.
-- [ ] Ringbuf events → blacklist: `drain_events()` сейчас только логирует debug;
-      нужен матчинг события → `ban_ip` (перенести из «loader», боится ошибок в data path).
+- [x] Ringbuf events → blacklist: opt-in `auto_ban` ([xdp] config, default OFF) —
+      EVENT_RATE_LIMIT всегда, EVENT_CONN_DROP при fails>=порога; EVENT_BAN/POLICY_DROP не
+      банят (ядро уже отработало / статик-политика без аккумуляции). Парсер 24-байтного
+      `struct xdp_event` с фиксом endianness (IP — сетевой порядок, скаляры — host),
+      метрика `rampart_xdp_autobans_total`, tests/xdp_events.rs (10 тестов).
 - [ ] Smoke-test attach в CI (VM runner с CAP_BPF) + netns+veth харнесс — вывод №7 из
       конкурентного анализа, приоритет v0.4.
 
@@ -146,10 +149,13 @@ guard/
   bin-файлы тонкие (rampart.rs: 330 → 6 строк).
 
 ### Новые найденные проблемы (чинить в v0.4)
-- [ ] `cargo check --no-default-features` сломан исторически: manager/sync и store ссылаются
-      на redis без `#[cfg(feature = "store-redis")]` — нарушение «features additive».
-- [ ] `src/app/runtime.rs`: узкий `#[allow(clippy::exit)]` — паллиатив после переноса main-логики
-      в lib; правильно — возвращать exit-код из `run()` вместо `process::exit`.
+- [x] `cargo check --no-default-features` починен (2026-09-15, раунд 2): redis-код в
+      manager/sync/api/store/app закрыт `#[cfg(feature = "store-redis")]`, менеджер без фичи fail-fast'ит на старте;
+      CI теперь гоняет `cargo check --no-default-features --all-targets` гейтом.
+- [x] `src/app/runtime.rs`: `#[allow(clippy::exit)]` убран — `app::run()` возвращает
+      `RunExit`, единственный `process::exit` теперь в `main` бина (clippy там не срабатывает).
+- [x] Флакающий тест `pow_roundtrip::verifier_rejects_garbage_and_replay` (p≈1/16 из-за
+      случайного токена) — сидирован, 50 прогонов до (3 fail) / после (0 fail).
 - [ ] IPv6-банов в XDP-putи нет (`ban_cidr` bail'ит на v6) — IPv6-паритет (вывод №8).
 
 ## 3. Backlog

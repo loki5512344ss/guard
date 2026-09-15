@@ -3,15 +3,20 @@ use libbpf_rs::{MapCore, MapFlags, Object, ObjectBuilder, RingBuffer, Xdp, XdpFl
 use std::net::IpAddr;
 use std::net::Ipv4Addr;
 use std::os::unix::io::AsFd;
+use std::sync::Arc;
 
 use super::XdpStats;
 use super::globals::XdpGlobals;
+use crate::config::XdpConfig;
+use crate::filter::blacklist::Blacklist;
 use crate::traffic::prefix::{PrefixKey, PrefixStatsVal};
 
 use attach::{build_ringbuf, interface_cstr, patch_rodata};
+use events::AutoBanConfig;
 use maps::{blacklist_expiry_ns, blacklist_key, unix_ns};
 
 mod attach;
+pub(crate) mod events;
 mod maps;
 
 pub struct XdpFilter {
@@ -20,6 +25,8 @@ pub struct XdpFilter {
     ifindex: i32,
     interface: String,
     globals: XdpGlobals,
+    blacklist: Option<Arc<Blacklist>>,
+    autoban: AutoBanConfig,
 }
 
 impl XdpFilter {
@@ -30,12 +37,24 @@ impl XdpFilter {
             ifindex: 0,
             interface: interface.to_string(),
             globals: XdpGlobals::default(),
+            blacklist: None,
+            autoban: AutoBanConfig::default(),
         }
     }
 
     /// Задаёт глобалы для патчинга `.rodata` при следующем `load()`.
     pub fn set_globals(&mut self, globals: XdpGlobals) {
         self.globals = globals;
+    }
+
+    /// Подключает OPT-IN авто-бан по ringbuf-событиям к userspace-`Blacklist`.
+    ///
+    /// До вызова `load()`. Политика читается из `[xdp]`-секции; если
+    /// `auto_ban_enabled = false` (по умолчанию), колбэк лишь логирует события и
+    /// не трогает blacklist.
+    pub fn set_autoban(&mut self, blacklist: Arc<Blacklist>, config: &XdpConfig) {
+        self.blacklist = Some(blacklist);
+        self.autoban = AutoBanConfig::from_xdp(config);
     }
 
     pub fn load(&mut self) -> Result<()> {
@@ -66,7 +85,8 @@ impl XdpFilter {
             .context("XDP program 'rampart_universal_filter' not found")?;
         Xdp::new(prog.as_fd()).attach(ifindex as i32, XdpFlags::NONE)?;
 
-        let rbuf = build_ringbuf(&obj)?;
+        super::metrics::init();
+        let rbuf = build_ringbuf(&obj, self.blacklist.clone(), self.autoban)?;
 
         self.obj = Some(obj);
         self.ringbuf = Some(rbuf);

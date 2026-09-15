@@ -2,5 +2,7 @@
 
 pub mod runtime;
 pub mod services;
+mod shutdown;
 
 pub use runtime::run;
+pub use shutdown::RunExit;

@@ -31,6 +31,18 @@ impl Challenge {
         }
     }
 
+    /// Challenge с явным токеном — для детерминированных тестов, где
+    /// случайный дайджест даёт flaky-исход.
+    #[must_use]
+    pub fn with_token(token: [u8; 32], difficulty: u8) -> Self {
+        Self {
+            token,
+            created_at: Instant::now(),
+            difficulty,
+            used: false,
+        }
+    }
+
     #[must_use]
     pub fn is_expired(&self) -> bool {
         self.created_at.elapsed().as_secs() >= CHALLENGE_TTL_SECS

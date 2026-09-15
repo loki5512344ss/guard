@@ -50,6 +50,16 @@ pub struct XdpConfig {
     pub throttle_enabled: bool,
     #[serde(default = "default_xdp_events_enabled")]
     pub events_enabled: bool,
+    /// OPT-IN: авто-бан по ringbuf-событиям XDP. По умолчанию выключен
+    /// («по умолчанию безопасно»): без него события только логируются.
+    #[serde(default)]
+    pub auto_ban_enabled: bool,
+    /// Длительность авто-бана в секундах (для RATE_LIMIT/CONN_DROP).
+    #[serde(default = "default_xdp_auto_ban_duration_secs")]
+    pub auto_ban_duration_secs: u64,
+    /// Порог `conn->fails` для авто-бана по EVENT_CONN_DROP (см. universal_filter.c:368).
+    #[serde(default = "default_xdp_auto_ban_conn_drop_fails")]
+    pub auto_ban_conn_drop_fails: u8,
 }
 
 impl Default for XdpConfig {
@@ -67,6 +77,9 @@ impl Default for XdpConfig {
             challenge_timeout_ms: default_xdp_challenge_timeout_ms(),
             throttle_enabled: default_xdp_throttle_enabled(),
             events_enabled: default_xdp_events_enabled(),
+            auto_ban_enabled: false,
+            auto_ban_duration_secs: default_xdp_auto_ban_duration_secs(),
+            auto_ban_conn_drop_fails: default_xdp_auto_ban_conn_drop_fails(),
         }
     }
 }
@@ -97,6 +110,12 @@ fn default_xdp_throttle_enabled() -> bool {
 }
 fn default_xdp_events_enabled() -> bool {
     true
+}
+fn default_xdp_auto_ban_duration_secs() -> u64 {
+    60
+}
+fn default_xdp_auto_ban_conn_drop_fails() -> u8 {
+    3
 }
 
 #[derive(Debug, Clone, Deserialize)]

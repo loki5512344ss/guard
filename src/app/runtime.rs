@@ -17,10 +17,12 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
+use tokio::sync::oneshot;
 use tokio::sync::watch;
 use tracing_subscriber::EnvFilter;
 
 use super::services::{build_registry, build_whitelist, start_subnet_tracker, start_xdp};
+use super::shutdown::{RunExit, spawn_shutdown_drain};
 
 fn attack_status_value(status: AttackStatus) -> i64 {
     match status {
@@ -32,9 +34,11 @@ fn attack_status_value(status: AttackStatus) -> i64 {
 
 /// Точка входа edge-демона (`rampart`): то, что делал `main` бинаря.
 ///
+/// Возвращает [`RunExit`] — выбор кода и самого завершения делает бинарь.
+///
 /// # Errors
 /// Ошибки старта: нечитаемый конфиг, пустой реестр протоколов, сбой listener.
-pub async fn run() -> anyhow::Result<()> {
+pub async fn run() -> anyhow::Result<RunExit> {
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::from_default_env().add_directive("rampart=info".parse()?))
         .init();
@@ -70,20 +74,9 @@ pub async fn run() -> anyhow::Result<()> {
     let allowed_1s = Arc::new(AtomicU64::new(0));
 
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    let (drain_tx, drain_rx) = oneshot::channel();
 
-    let sig_tx = shutdown_tx.clone();
-    // shutdown-таймер обязан завершить процесс; в исходном коде вызов жил
-    // внутри `fn main` и был освобождён от clippy::exit. Чистый перенос в
-    // lib сохранил бы поведение, поэтому узкий allow — минимальная цена.
-    #[allow(clippy::exit)]
-    tokio::spawn(async move {
-        wait_for_signal().await;
-        tracing::info!("shutdown signal received, draining connections...");
-        let _ = sig_tx.send(true);
-        tokio::time::sleep(Duration::from_secs(5)).await;
-        tracing::info!("shutdown timeout reached, exiting");
-        std::process::exit(0);
-    });
+    spawn_shutdown_drain(shutdown_tx.clone(), drain_tx);
 
     #[cfg(feature = "store-redis")]
     if let Some(redis_url) = &config.store.redis_url
@@ -121,7 +114,7 @@ pub async fn run() -> anyhow::Result<()> {
         _ => None,
     };
 
-    let xdp_filter = start_xdp(&config, &shutdown_rx)?;
+    let xdp_filter = start_xdp(&config, &shutdown_rx, &blacklist)?;
     let subnet_tracker = start_subnet_tracker(&config);
     monitor::spawn(
         &config.detect.prefix,
@@ -197,7 +190,15 @@ pub async fn run() -> anyhow::Result<()> {
         registry,
         subnet_tracker,
     ));
-    listener::run(config, gateway, hook, shutdown_rx).await
+    tokio::select! {
+        result = listener::run(config, gateway, hook, shutdown_rx) => {
+            result?;
+            Ok(RunExit::Ok)
+        }
+        // Drain-таймаут сработал: возвращаем сигнал бинарю завершить процесс
+        // немедленно, как это делал прежний `process::exit(0)`.
+        _ = drain_rx => Ok(RunExit::DrainTimeout),
+    }
 }
 
 async fn push_attack_event(writer: &Option<Arc<tokio::sync::Mutex<ClickHouseWriter>>>, pps: f64) {
@@ -214,16 +215,5 @@ async fn push_attack_event(writer: &Option<Arc<tokio::sync::Mutex<ClickHouseWrit
     };
     if let Err(e) = writer.lock().await.push(event).await {
         tracing::debug!("clickhouse push error: {e}");
-    }
-}
-
-async fn wait_for_signal() {
-    let ctrl_c = tokio::signal::ctrl_c();
-    let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-        .expect("failed to install SIGTERM handler");
-
-    tokio::select! {
-        _ = ctrl_c => {}
-        _ = term.recv() => {}
     }
 }
