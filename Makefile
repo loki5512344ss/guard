@@ -3,10 +3,10 @@
 CARGO = cargo
 TARGET_DIR = target
 
-.PHONY: all build release test check check-all fmt fmt-check clippy clean deny audit
+.PHONY: all build release test test-all check check-all fmt fmt-check clippy clean deny audit
 .PHONY: ebpf ebpf-clean
 .PHONY: docker docker-build docker-up docker-down docker-logs
-.PHONY: ci ci-full
+.PHONY: ci ci-full repo-gates
 
 all: check test build
 
@@ -26,6 +26,9 @@ check-all:
 
 test:
 	$(CARGO) test
+
+test-all:
+	$(CARGO) test --all-features
 
 fmt:
 	$(CARGO) fmt --all
@@ -75,7 +78,11 @@ docker-logs:
 checkstyle: fmt-check clippy
 	@echo "✓ Checkstyle passed (rustfmt + clippy)"
 
-ci: checkstyle test build deny
+repo-gates:
+	bash scripts/check_module_size.sh
+	bash scripts/check_default_secrets.sh
+
+ci: checkstyle test-all build deny repo-gates
 	@echo "✓ CI passed"
 
 ci-full: ci ebpf

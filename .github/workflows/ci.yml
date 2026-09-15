@@ -40,7 +40,17 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: cargo test
+      - run: cargo test --all-features
+
+  repo-gates:
+    name: Repo — module size & default secrets
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Module size gate
+        run: bash scripts/check_module_size.sh
+      - name: Default secrets gate
+        run: bash scripts/check_default_secrets.sh
 
   rust-deny:
     name: Rust — cargo-deny

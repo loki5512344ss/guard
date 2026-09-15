@@ -1,10 +1,9 @@
 //! Загрузчик XDP-программы (L3/L4-уровень защиты).
-mod stats;
-pub use stats::XdpStats;
 
-mod diagnostics;
-pub use diagnostics::{
-    AttachMode, EnvironmentReport, FilesystemProbe, KernelVersion, MIN_KERNEL, SystemProbe, driver_supports_native_xdp,
+mod probe;
+pub use probe::{
+    AttachMode, EnvironmentReport, FilesystemProbe, KernelVersion, MIN_KERNEL, SystemProbe, XdpStats,
+    driver_supports_native_xdp,
 };
 
 #[cfg(feature = "xdp")]
@@ -18,9 +17,7 @@ mod filter;
 pub use filter::XdpFilter;
 
 #[cfg(feature = "xdp")]
-mod metrics;
-#[cfg(feature = "xdp")]
-pub use metrics::XdpMetrics;
+pub use probe::XdpMetrics;
 
 #[cfg(not(feature = "xdp"))]
 mod noop;

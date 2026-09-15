@@ -46,16 +46,16 @@ async fn main() -> anyhow::Result<()> {
     tokio::spawn(sync::heartbeat::start_heartbeat_check(state.clone()));
 
     let public = Router::new()
-        .route("/api/v1/health", get(api::health::health_check))
+        .route("/api/v1/health", get(api::inventory::health::health_check))
         .route("/api/v1/auth/login", post(api::auth::login));
 
     let protected = Router::new()
-        .route("/api/v1/servers", get(api::servers::list_servers))
+        .route("/api/v1/servers", get(api::inventory::servers::list_servers))
         .route(
             "/api/v1/blacklist",
             get(api::blacklist::list_blacklist).post(api::blacklist::add_blacklist),
         )
-        .route("/api/v1/nodes", get(api::nodes::list_nodes))
+        .route("/api/v1/nodes", get(api::inventory::nodes::list_nodes))
         .route_layer(middleware::from_fn(auth::auth_middleware));
 
     let cors = match std::env::var("CORS_ORIGIN") {
