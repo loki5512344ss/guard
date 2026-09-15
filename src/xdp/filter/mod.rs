@@ -1,12 +1,18 @@
 use anyhow::{Context, Result, bail};
-use libbpf_rs::{MapCore, MapFlags, Object, ObjectBuilder, OpenObject, RingBuffer, RingBufferBuilder, Xdp, XdpFlags};
+use libbpf_rs::{MapCore, MapFlags, Object, ObjectBuilder, RingBuffer, Xdp, XdpFlags};
 use std::net::IpAddr;
 use std::net::Ipv4Addr;
 use std::os::unix::io::AsFd;
 
 use super::XdpStats;
-use super::globals::{RODATA_MAP_NAME, XdpGlobals};
+use super::globals::XdpGlobals;
 use crate::traffic::prefix::{PrefixKey, PrefixStatsVal};
+
+use attach::{build_ringbuf, interface_cstr, patch_rodata};
+use maps::{blacklist_expiry_ns, blacklist_key, unix_ns};
+
+mod attach;
+mod maps;
 
 pub struct XdpFilter {
     obj: Option<Object>,
@@ -34,7 +40,7 @@ impl XdpFilter {
 
     pub fn load(&mut self) -> Result<()> {
         // Диагностика ДО загрузки: fail-fast на неподдерживаемом ядре/драйвере.
-        super::diagnostics::preflight(&self.interface)?;
+        super::probe::preflight(&self.interface)?;
 
         let bpf_obj = include_bytes!(concat!(env!("OUT_DIR"), "/universal_filter.o"));
         let mut open_obj = ObjectBuilder::default()
@@ -43,9 +49,15 @@ impl XdpFilter {
         patch_rodata(&mut open_obj, &self.globals)?;
         let obj = open_obj.load().context("Failed to load XDP object (verifier error?)")?;
 
-        let ifindex = unsafe { libc::if_nametoindex(self.interface.as_ptr() as *const libc::c_char) };
+        let c_interface = interface_cstr(&self.interface)?;
+        // SAFETY: `c_interface` is a valid, NUL-terminated C string and is kept
+        // alive until the end of this scope (past the `if_nametoindex` call), so
+        // the raw pointer satisfies the `const char *` contract of the libc FFI.
+        // Rust `&str` is NOT NUL-terminated, hence the `CString` conversion above.
+        let ifindex = unsafe { libc::if_nametoindex(c_interface.as_ptr()) };
         if ifindex == 0 {
-            bail!("interface '{}' not found", self.interface);
+            let err = std::io::Error::last_os_error();
+            bail!("interface '{}' not found: {err}", self.interface);
         }
 
         let prog = obj
@@ -64,14 +76,35 @@ impl XdpFilter {
     }
 
     pub fn unload(&mut self) -> Result<()> {
-        if self.ifindex != 0 {
-            let fd = unsafe { std::os::unix::io::BorrowedFd::borrow_raw(std::os::unix::io::RawFd::from(-1)) };
-            let _ = Xdp::new(fd).detach(self.ifindex, XdpFlags::NONE);
+        if let Some(obj) = self.obj.as_ref() {
+            self.detach_program(obj)?;
         }
         self.ringbuf = None;
         self.obj = None;
         self.ifindex = 0;
         tracing::info!("XDP filter detached from {}", self.interface);
+        Ok(())
+    }
+
+    /// Detaches the XDP program using the real program fd owned by the loaded
+    /// `Object` (mirroring `load`'s `Xdp::new(prog.as_fd()).attach(..)`). A
+    /// detach failure while a filter is active is surfaced loudly and returned,
+    /// never swallowed — otherwise the kernel keeps dropping packets we no
+    /// longer intend to filter.
+    fn detach_program(&self, obj: &Object) -> Result<()> {
+        let prog = obj
+            .progs()
+            .find(|p| p.name() == "rampart_universal_filter")
+            .context("XDP program 'rampart_universal_filter' not found while detaching")?;
+        if let Err(e) = Xdp::new(prog.as_fd()).detach(self.ifindex, XdpFlags::NONE) {
+            tracing::error!(
+                interface = %self.interface,
+                ifindex = self.ifindex,
+                error = %e,
+                "XDP detach failed while filter was active"
+            );
+            return Err(e).with_context(|| format!("failed to detach XDP from '{}'", self.interface));
+        }
         Ok(())
     }
 
@@ -107,22 +140,15 @@ impl XdpFilter {
 
     fn blacklist_update(&self, prefix_len: u8, v4: &[u8; 4], duration_secs: u64) -> Result<()> {
         let map = self.find_map("blacklist_map")?;
-        let mut key = [0u8; 8];
-        key[0] = prefix_len;
-        key[4..8].copy_from_slice(v4);
-        map.update(
-            &key,
-            &(unix_ns() + duration_secs * 1_000_000_000).to_le_bytes(),
-            MapFlags::ANY,
-        )?;
+        let key = blacklist_key(prefix_len, v4);
+        let expiry_ns = blacklist_expiry_ns(unix_ns(), duration_secs);
+        map.update(&key, &expiry_ns.to_le_bytes(), MapFlags::ANY)?;
         Ok(())
     }
 
     pub fn unban_ip(&self, ip: Ipv4Addr) -> Result<()> {
         let map = self.find_map("blacklist_map")?;
-        let mut key = [0u8; 8];
-        key[0] = 32;
-        key[4..8].copy_from_slice(&ip.octets());
+        let key = blacklist_key(32, &ip.octets());
         map.delete(&key)?;
         Ok(())
     }
@@ -175,46 +201,15 @@ impl XdpFilter {
     }
 }
 
+// SAFETY: `XdpFilter` is only ever accessed from the single thread that owns it,
+// held behind `Arc<Mutex<XdpFilter>>`; that Mutex serialization is the invariant
+// that makes moving it across threads sound. Auto-`Send` is not derived because
+// `libbpf_rs::Object` and the `RingBuffer<'static>` wrap non-`Send` libbpf
+// handles, so the marker is asserted manually under the ownership discipline above.
 unsafe impl Send for XdpFilter {}
 
 impl Drop for XdpFilter {
     fn drop(&mut self) {
         let _ = self.unload();
     }
-}
-
-fn unix_ns() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos() as u64
-}
-
-/// Патчит карту `rampart_.rodata` (volatile const глобалы) ДО загрузки объекта.
-fn patch_rodata(open_obj: &mut OpenObject, globals: &XdpGlobals) -> Result<()> {
-    let image = globals.build_rodata_image();
-    let mut map = open_obj
-        .maps_mut()
-        .find(|m| m.name() == RODATA_MAP_NAME)
-        .with_context(|| format!("map '{RODATA_MAP_NAME}' not found in XDP object"))?;
-    map.set_initial_value(&image)
-        .with_context(|| format!("failed to set initial value of '{RODATA_MAP_NAME}'"))
-}
-
-fn build_ringbuf(obj: &Object) -> Result<RingBuffer<'static>> {
-    let map = obj
-        .maps()
-        .find(|m| m.name() == "events_map")
-        .context("events_map not found")?;
-    let mut builder = RingBufferBuilder::new();
-    builder.add(&map, |data: &[u8]| {
-        if data.len() >= 16 {
-            let ty = u32::from_ne_bytes(data[0..4].try_into().expect("4 bytes for type"));
-            let ip4 = u32::from_ne_bytes(data[4..8].try_into().expect("4 bytes for ip"));
-            let val = u64::from_ne_bytes(data[8..16].try_into().expect("8 bytes for val"));
-            tracing::debug!(event = ty, src_ip = ip4, data = val, "xdp event");
-        }
-        0
-    })?;
-    Ok(builder.build()?)
 }

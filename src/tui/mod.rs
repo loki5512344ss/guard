@@ -4,7 +4,8 @@
 //! exposition endpoint (`/metrics`).
 
 pub mod app;
-pub mod fetch;
-pub mod prometheus;
+pub mod metrics;
 pub mod state;
 pub mod ui;
+
+pub use metrics::{fetch, prometheus};

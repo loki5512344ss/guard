@@ -12,7 +12,10 @@
 
 ### KISS
 - Не добавляй абстракцию до третьего повторения.
-- **Функция ≤ 60 строк, модуль ≤ 300 строк** (жёсткий лимит; больше — декомпозиция).
+- **Функция ≤ 60 строк, файл ≤ 250 строк, ≤ 4 .rs-файлов на папку** (жёсткий лимит;
+  больше — декомпозиция или группировка доменами с ре-экспортами в mod.rs).
+  Гейт: `scripts/check_module_size.sh` + ratchet-базлайн `.module_size_baseline`
+  (легаси — WARN, новые нарушения — FAIL; после рефакторинга `--update-baseline`).
 - Не используй generics где хватит `&str` и `Vec<u8>`.
 
 ### DRY
@@ -44,19 +47,24 @@
 ```
 guard/
 ├── Cargo.toml                  # ОДИН пакет rampart, features = ["protocol-http", ...]
+├── scripts/                    # check_module_size.sh (гейт 250/4), check_default_secrets.sh
 ├── src/
-│   ├── bin/{rampart, rampart-manager, rampart-cli}.rs
-│   ├── engine/                 # listener, tunnel (generic TCP proxy), challenge (PoW)
+│   ├── bin/{rampart, rampart-manager, rampart-cli, rampart-tui}.rs   # тонкие, логика в lib
+│   ├── app/                    # thin-main: runtime wiring, services (spawn-циклы)
+│   ├── engine/                 # listener, tunnel; challenge/ (pow+difficulty), subnet/ (tracker+monitor)
 │   ├── filter/                 # blacklist, rate_limit, geo — trait Filter
-│   ├── traffic/                # EWMA, detector, profiler, reputation, alert
+│   ├── traffic/                # hook + prefix/ (key+stats) + intel/ (ewma,detector,reputation) + profile/ (profiler,alert)
 │   ├── store/                  # redis (+ trait StateStore)
-│   ├── manager/                # api/, auth/, sync/
-│   ├── cli/                    # команды CLI
-│   └── protocol/               # trait ProtocolHandler + registry (реализаций пока 0)
+│   ├── manager/                # api/ (+ api/inventory/), auth/, sync/
+│   ├── cli/                    # команды; commands/node/ (status,drain,emergency)
+│   ├── config/                 # config + sections/{edge,platform,detect}
+│   ├── tui/                    # app/state/ui + metrics/ (prometheus,fetch)
+│   ├── protocol/               # trait ProtocolHandler + registry; http/ под фичей
+│   └── xdp/                    # filter/ (attach,maps), probe/ (diagnostics/,stats,metrics), globals, noop
 ├── xdp/
-│   ├── core/                   # universal_filter.c + maps/stats/config/common.h
+│   ├── core/                   # universal_filter.c + maps/stats/config/common.h + prefix_stats/syn_challenge
 │   └── hooks/hook_api.h        # контракт подключаемых BPF-протокол-хуков
-├── tests/                      # интеграционные
+├── tests/                      # интеграционные (вне гейта 4-файлов: cargo требует 1 файл = 1 бинарь)
 └── docs/                       # kb/ (knowledge base) + research/ + ops-доки
 ```
 
@@ -78,46 +86,71 @@ guard/
 
 ## 2. Ближайшие задачи (v0.3)
 
-### Subnet-level detection (ботнет с ротацией IP)
-- [ ] **XDP**: карта `prefix_stats` (LRU_HASH, ключ /24 v4 | /64 v6) — счётчики SYN/pps
-      per-префикс рядом с per-IP (референс: caddy-mitigator CIDR promotion, lnvps_fw carpet-bomb).
-- [ ] **Detector**: префикс превышает порог при том что отдельные IP под лимитом
-      → распределённая атака → флаг подсети.
-- [ ] **Мягкая эскалация для подсетей**: monitor → strict limits → challenge → блок.
-      Хард-бан /24 только через challenge (CGNAT: за одним /24 легитимно живут сотни людей).
-- [ ] Блок самой подсети — уже умеем: `blacklist_map` это LPM trie (CIDR из коробки).
+### Subnet-level detection (ботнет с ротацией IP) — ✅ готово (2026-08/09)
+- [x] **XDP**: карта `prefix_stats` (LRU_HASH, ключ /24 v4 | /64 v6) — счётчики SYN/pps
+      per-префикс (xdp/core/prefix_stats.h, трафик-слой: src/traffic/prefix/).
+- [x] **Detector**: превышение порога префиксом при IP под лимитом → флаг подсети
+      (src/traffic/intel/detector.rs, src/engine/subnet/).
+- [x] **Мягкая эскалация**: monitor → strict_limit → challenge → block
+      (SubnetVerdict-лестница; блок /24 идёт через ban_cidr, не слепой hard-ban).
+- [x] Блок подсети через `blacklist_map` (LPM trie) — `XdpFilter::ban_cidr`.
 
-### Движок без протоколов — сделать полезным
-- [ ] **Первый протокол-плагин**: `protocol-http` (feature) — минимальный HTTP/1.1
-      handshake-анализ (request line, заголовки, размер), чтобы edge-нода заработала
-      для веб-сервисов.
-- [ ] **TCP-proxy режим**: generic upstream forwarding за ProtocolHandler
-      (tunnel.rs уже generic — проверить интеграцию).
-- [ ] **Fail-fast сообщение** при пустом registry — улучшить текст подсказки сборки.
+### Движок без протоколов — сделать полезным — ✅ готово
+- [x] **Первый протокол-плагин**: `protocol-http` — HTTP/1.1 request-head анализ
+      (src/protocol/http/, tests/http_protocol.rs).
+- [x] **TCP-proxy режим**: tunnel.rs + ProtocolHandler интегрированы в listener/app wiring.
+- [x] **Fail-fast сообщение** при пустом registry (`ProtocolRegistry::primary()`).
 
-### Подключение мёртвого интеллекта (правило: «мёртвый код = баг»)
-- [ ] Layer Traffic Intel подключить в hot path: AttackDetector/IpReputation →
-      метрики + auto-ban (сейчас не вызывается).
-- [ ] Blacklist: `clear_expired()` по таймеру.
-- [ ] RateLimiter: TTL-эвикция idle bucket'ов + cap карты.
+### Подключение мёртвого интеллекта (правило: «мёртвый код = баг») — ✅ готово
+- [x] Traffic Intel в hot path: AttackDetector/IpReputation → метрики + auto-ban
+      (src/traffic/hook.rs, src/engine/tunnel.rs, src/app/services.rs).
+- [x] Blacklist: `clear_expired()` по таймеру (src/app/).
+- [x] RateLimiter: TTL-эвикция idle bucket'ов.
 
-### Безопасность (перенос из аудита v0.3, актуальное)
-- [ ] Rate limiter на login endpoint manager API (5/60с).
-- [ ] JWT: валидация ролей/audience, secret ≥ 32 байт.
-- [ ] Redis: `KEYS` → `SCAN`, reconnect pubsub-подписчика.
+### Безопасность — ✅ кроме ролей
+- [x] Rate limiter на login endpoint manager API (per-IP, tests в api/auth.rs).
+- [x] JWT: audience-валидация, secret ≥ 32 байт fail-fast (rampart-manager.rs).
+- [ ] JWT-роли: сейчас единственный hardcoded `admin`; RBAC-ролей нет — либо убрать поле,
+      либо делать роли (решение отложить до второго потребителя).
+- [x] Redis: `KEYS` → `SCAN` (scan_options), pubsub-подписчик — честный reconnect
+      с экспоненциальным backoff (src/store/redis.rs).
 
 ### XDP
-- [ ] Verifier-проверка на реальном ядре (в контейнере нет CAP_BPF — компиляция OK,
-      загрузка не проверялась).
-- [ ] Rust loader (`src/xdp/`): пути к xdp/core/universal_filter.c, patch глобалов
-      G_* из config.toml, ringbuf events → blacklist.
-- [ ] Smoke-test attach в CI (VM runner с CAP_BPF).
+- [x] Verifier-проверка на реальном ядре (live-тест 2026-09: два бага RST-challenge найдены и
+      исправлены, d6bcae5).
+- [x] Rust loader (`src/xdp/filter/`): open/load/attach, patch глобалов G_* из config.toml
+      (src/xdp/globals.rs), CString-safe if_nametoindex, реальный detach по fd прогрессы.
+- [ ] Ringbuf events → blacklist: `drain_events()` сейчас только логирует debug;
+      нужен матчинг события → `ban_ip` (перенести из «loader», боится ошибок в data path).
+- [ ] Smoke-test attach в CI (VM runner с CAP_BPF) + netns+veth харнесс — вывод №7 из
+      конкурентного анализа, приоритет v0.4.
 
 ### Документация
-- [ ] docs/deployment.md, configuration.md, runbook.md — переписать под новую структуру
-      (сейчас упоминают старые крейты/MC).
-- [ ] docs/kb/README.md — индекс KB со ссылками на все статьи.
-- [ ] TUI (ratatui): live-метрики из Prometheus endpoint (planned, v0.4).
+- [x] docs/deployment.md, configuration.md, runbook.md — старых крейтов/MC не упоминают (grep чисто).
+- [x] docs/kb/README.md — индекс KB со ссылками.
+- [x] TUI (ratatui): live-метрики из Prometheus endpoint — готово (src/tui/, 564613b).
+
+## 2a. Раунд 2026-09-15 — исправлено по итогам ревью
+
+- **unsafe-баги XDP-лоадера** (src/xdp/filter/): `&str.as_ptr()` без NUL в `if_nametoindex` → `CString`;
+  фиктивный `borrow_raw(-1)`-fd в `unload()` → реальный detach по fd прогрессы с propagatable ошибкой;
+  `unsafe impl Send` получил `// SAFETY:`; `saturating_mul` в expiry. +5 юнит-тестов.
+- **Redis**: fake-reconnect pubsub (sleep+return) → настоящий reconnect-loop с backoff;
+  `KEYS` → `SCAN` в heartbeat.
+- **CI**: `cargo test --all-features` (раньше тесты фич не гонялись); job `repo-gates`:
+  гейт 250/4 + grep дефолтных секретов; Makefile `ci` обновлён.
+- **README**: несуществующие `rampart-core`/`rampart config init` → реальные команды;
+  таблица компонентов/плагинов приведена к коду (http готов, minecraft удалён, добавлен rampart-tui).
+- **Рефакторинг под новые лимиты 250/4** без изменения поведения: app/, challenge/, subnet/,
+  prefix/, intel/, profile/, commands/node/, api/inventory/, tui/metrics/, filter/, probe/;
+  bin-файлы тонкие (rampart.rs: 330 → 6 строк).
+
+### Новые найденные проблемы (чинить в v0.4)
+- [ ] `cargo check --no-default-features` сломан исторически: manager/sync и store ссылаются
+      на redis без `#[cfg(feature = "store-redis")]` — нарушение «features additive».
+- [ ] `src/app/runtime.rs`: узкий `#[allow(clippy::exit)]` — паллиатив после переноса main-логики
+      в lib; правильно — возвращать exit-код из `run()` вместо `process::exit`.
+- [ ] IPv6-банов в XDP-putи нет (`ban_cidr` bail'ит на v6) — IPv6-паритет (вывод №8).
 
 ## 3. Backlog
 
@@ -190,7 +223,8 @@ guard/
 5. **По умолчанию безопасно**: нет дефолтных секретов; отсутствие обязательного env = fail-fast.
 6. **Интеграционный тест на слой**: config parse, filter logic, registry fail-fast (есть);
    новый слой = новый тест.
-7. **Модуль ≤ 300 строк**: CI-гейт через grep/wc скрипт или ревью.
+7. **Файл ≤ 250 строк, папка ≤ 4 .rs**: CI-гейт `scripts/check_module_size.sh`
+   (ratchet-базлайн `.module_size_baseline`: легаси — WARN, новые нарушения — FAIL).
 8. **CI guardrails**: `cargo clippy --all-targets -- -D warnings`, `cargo test`,
    clang-build xdp/core/universal_filter.c, grep на `changeme`.
 9. **README/TODO не врут**: каждое число имеет ссылку на тест или отчёт.
@@ -201,7 +235,7 @@ guard/
 ☐ cargo check / cargo test проходят
 ☐ cargo clippy --all-targets -- -D warnings — 0 warnings
 ☐ cargo fmt --check проходит
-☐ Ни один модуль не превышает 300 строк
+☐ Ни один файл не превышает 250 строк; ни в одной папке src/ больше 4 .rs-файлов
 ☐ Unit тесты покрывают happy path + 2+ error cases
 ☐ Нет мёртвого кода: pub без вызовов, конфиг-поле без потребителя, метрика без writer
 ☐ Нет дефолтных секретов
@@ -214,7 +248,7 @@ guard/
 
 ```
 ❌ Тесты после кода. Пиши вместе.
-❌ Модуль > 300 строк — сигнал декомпозировать немедленно.
+❌ Файл > 250 строк или > 4 .rs в папке — сигнал декомпозировать/сгруппировать немедленно.
 ❌ TODO в коде без issue.
 ❌ Мёртвый код: pub без вызовов, конфиг-поле без потребителя, метрика без writer.
 ❌ «Бумажный слой»: фича описана, но не вызывается.
@@ -225,4 +259,4 @@ guard/
 
 ---
 
-*Версия: 4.0 | Обновлён: 2026-08-24 (universal redesign)*
+*Версия: 5.0 | Обновлён: 2026-09-15 (bug-fix раунд: XDP unsafe, Redis reconnect/SCAN, CI-гейты, лимиты 250/4)*

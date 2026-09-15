@@ -55,7 +55,7 @@ async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Status => commands::status::run().await,
+        Commands::Status => commands::node::status::run().await,
         Commands::Doctor => commands::doctor::run().await,
         Commands::Config { key, value } => commands::config::run(key, value).await,
         Commands::Blacklist { action } => match action {
@@ -64,9 +64,9 @@ async fn main() -> anyhow::Result<()> {
             BlacklistAction::List => commands::blacklist::list().await,
         },
         Commands::Emergency { mode } => match mode {
-            EmergencyMode::Enable => commands::emergency::enable().await,
-            EmergencyMode::Disable => commands::emergency::disable().await,
+            EmergencyMode::Enable => commands::node::emergency::enable().await,
+            EmergencyMode::Disable => commands::node::emergency::disable().await,
         },
-        Commands::Drain { node } => commands::drain::run(&node).await,
+        Commands::Drain { node } => commands::node::drain::run(&node).await,
     }
 }

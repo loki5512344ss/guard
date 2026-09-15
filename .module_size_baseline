@@ -1,0 +1,3 @@
+# Module size ratchet baseline — read by scripts/check_module_size.sh
+# Oversized files: plain path. Overcrowded directories: path with trailing /.
+# Regenerate after a refactor: bash scripts/check_module_size.sh --update-baseline

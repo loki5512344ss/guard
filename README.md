@@ -54,7 +54,7 @@ Protocol-specific logic lives in **modular protocol plugins**, so the same platf
 │    L7 handshake analysis · rate limit · HMAC · death-code patterns │
 ├────────────────────────────────────────────────────────────────────┤
 │  Layer 4: Protocol Plugins (feature crates)                        │
-│    minecraft (first plugin) · http (planned) · grpc (planned)      │
+│    http (feature protocol-http) · grpc (planned)                   │
 └────────────────────────────────────────────────────────────────────┘
           Traffic Intel (EWMA thresholds, profiling, reputation)
                     runs across all layers
@@ -69,12 +69,13 @@ Attacker → [XDP/eBPF] → [PoW] → [Userspace Core] → [Plugin] → Your Ser
 
 | Component | Role | Stack |
 |-----------|------|-------|
-| **rampart-core** | Edge engine: XDP loader, PoW challenge, L7 filtering, traffic intel | Rust (tokio, libbpf) + C (XDP) |
+| **rampart** | Edge engine: XDP loader, PoW challenge, L7 filtering, traffic intel | Rust (tokio, libbpf) + C (XDP) |
 | **rampart-manager** | Management API + Redis sync | Rust (axum, redis) |
 | **rampart-cli** | CLI tool for operators | Rust (clap) |
+| **rampart-tui** | Live metrics terminal dashboard, polls the Prometheus `/metrics` endpoint | Rust (ratatui) |
 | **protocol plugins** | Protocol-aware filtering as feature crates | Rust |
-| ↳ `minecraft` | First plugin (MC handshake analysis) | Rust |
-| ↳ `http`, `grpc` | Planned | Rust |
+| ↳ `http` | HTTP/1.1 handler, compiled with the `protocol-http` feature | Rust |
+| ↳ `grpc` | Planned | Rust |
 | **docs/kb** | Bilingual knowledge base: attack anatomy, defense levels, practice guides | Markdown |
 
 ### Performance
@@ -92,14 +93,15 @@ Full benchmark suite in progress.
 ### Quick Start
 
 ```bash
-# Build
-cargo build --release
+# Build (the HTTP protocol handler is a feature)
+cargo build --release --features protocol-http
 
-# Create config
-rampart config init > /etc/rampart/config.toml
+# Install the default config
+sudo mkdir -p /etc/rampart
+sudo cp deploy/config/edge.toml /etc/rampart/config.toml
 
-# Run edge node
-./target/release/rampart-core --config /etc/rampart/config.toml
+# Run edge node (config path comes from $RAMPART_CONFIG, default /etc/rampart/config.toml)
+RAMPART_CONFIG=/etc/rampart/config.toml ./target/release/rampart
 ```
 
 ### Documentation
@@ -118,8 +120,6 @@ rampart config init > /etc/rampart/config.toml
 
 - Stabilize the protocol plugin API
 - BPF hook modules for deep protocol parsing in XDP
-- Terminal UI (ratatui TUI)
-- HTTP protocol plugin
 
 ---
 
@@ -153,7 +153,7 @@ Rampart фильтрует трафик на трёх уровнях до тог
 │    L7 handshake analysis · rate limit · HMAC · death-code паттерны │
 ├────────────────────────────────────────────────────────────────────┤
 │  Слой 4: Протокол-плагины (feature crates)                         │
-│    minecraft (первый плагин) · http (в планах) · grpc (в планах)   │
+│    http (feature protocol-http) · grpc (в планах)                  │
 └────────────────────────────────────────────────────────────────────┘
      Traffic Intel (EWMA thresholds, профилирование, репутация)
                  работает поперёк всех слоёв
@@ -168,12 +168,13 @@ Rampart фильтрует трафик на трёх уровнях до тог
 
 | Компонент | Роль | Технологии |
 |-----------|------|------------|
-| **rampart-core** | Edge-движок: XDP loader, PoW challenge, L7-фильтрация, traffic intel | Rust (tokio, libbpf) + C (XDP) |
+| **rampart** | Edge-движок: XDP loader, PoW challenge, L7-фильтрация, traffic intel | Rust (tokio, libbpf) + C (XDP) |
 | **rampart-manager** | Management API + Redis sync | Rust (axum, redis) |
 | **rampart-cli** | CLI для операторов | Rust (clap) |
+| **rampart-tui** | Терминальный дашборд live-метрик, опрашивает Prometheus `/metrics` | Rust (ratatui) |
 | **Протокол-плагины** | Протоколозависимая фильтрация в виде feature crates | Rust |
-| ↳ `minecraft` | Первый плагин (анализ MC-handshake) | Rust |
-| ↳ `http`, `grpc` | В планах | Rust |
+| ↳ `http` | HTTP/1.1-обработчик, собирается с фичей `protocol-http` | Rust |
+| ↳ `grpc` | В планах | Rust |
 | **docs/kb** | Двуязычная база знаний: анатомия атак, уровни защиты, практические руководства | Markdown |
 
 ### Производительность
@@ -191,14 +192,15 @@ Rampart фильтрует трафик на трёх уровнях до тог
 ### Быстрый старт
 
 ```bash
-# Сборка
-cargo build --release
+# Сборка (HTTP-обработчик собирается фичей)
+cargo build --release --features protocol-http
 
-# Создание конфига
-rampart config init > /etc/rampart/config.toml
+# Установка дефолтного конфига
+sudo mkdir -p /etc/rampart
+sudo cp deploy/config/edge.toml /etc/rampart/config.toml
 
-# Запуск edge ноды
-./target/release/rampart-core --config /etc/rampart/config.toml
+# Запуск edge ноды (путь конфига берётся из $RAMPART_CONFIG, по умолчанию /etc/rampart/config.toml)
+RAMPART_CONFIG=/etc/rampart/config.toml ./target/release/rampart
 ```
 
 ### Документация
@@ -217,8 +219,6 @@ rampart config init > /etc/rampart/config.toml
 
 - Стабилизация API протокол-плагинов
 - BPF hook модули для глубокого парсинга протоколов в XDP
-- Терминальный интерфейс (ratatui TUI)
-- HTTP протокол-плагин
 
 ---
 
