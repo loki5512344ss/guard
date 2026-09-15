@@ -1,8 +1,15 @@
 use anyhow::{Context, Result};
 use libbpf_rs::{MapCore, Object, OpenObject, RingBuffer, RingBufferBuilder};
 use std::ffi::CString;
+use std::net::IpAddr;
+use std::sync::Arc;
+use std::time::Duration;
 
+use crate::filter::blacklist::Blacklist;
 use crate::xdp::globals::{RODATA_MAP_NAME, XdpGlobals};
+use crate::xdp::metrics::XDP_AUTOBANS_TOTAL;
+
+use super::events::{AutoBanConfig, auto_ban_decision, parse_xdp_event};
 
 /// Builds the NUL-terminated C string libc's `if_nametoindex` requires.
 /// Rejects interface names containing an interior NUL byte instead of
@@ -22,18 +29,59 @@ pub(super) fn patch_rodata(open_obj: &mut OpenObject, globals: &XdpGlobals) -> R
         .with_context(|| format!("failed to set initial value of '{RODATA_MAP_NAME}'"))
 }
 
-pub(super) fn build_ringbuf(obj: &Object) -> Result<RingBuffer<'static>> {
+/// Собирает ringbuf-колбэк для `events_map`.
+///
+/// Колбэк обязан быть `'static`, поэтому всё разделяемое состояние (`Arc<Blacklist>`,
+/// копия `AutoBanConfig`) захватывается `move`-клонами. Когда `blacklist` — `None`
+/// (фича не подключена) или политика выключена, события только парсятся и
+/// логируются структурированно; баны не пишутся. В горячем пути нет `format!` —
+/// `tracing`-поля и `&'static str` причины.
+pub(super) fn build_ringbuf(
+    obj: &Object,
+    blacklist: Option<Arc<Blacklist>>,
+    cfg: AutoBanConfig,
+) -> Result<RingBuffer<'static>> {
     let map = obj
         .maps()
         .find(|m| m.name() == "events_map")
         .context("events_map not found")?;
     let mut builder = RingBufferBuilder::new();
-    builder.add(&map, |data: &[u8]| {
-        if data.len() >= 16 {
-            let ty = u32::from_ne_bytes(data[0..4].try_into().expect("4 bytes for type"));
-            let ip4 = u32::from_ne_bytes(data[4..8].try_into().expect("4 bytes for ip"));
-            let val = u64::from_ne_bytes(data[8..16].try_into().expect("8 bytes for val"));
-            tracing::debug!(event = ty, src_ip = ip4, data = val, "xdp event");
+    builder.add(&map, move |data: &[u8]| {
+        let Some(event) = parse_xdp_event(data) else {
+            tracing::debug!(
+                len = data.len(),
+                "xdp ringbuf frame ignored (too short or unknown type)"
+            );
+            return 0;
+        };
+        tracing::debug!(
+            kind = ?event.kind,
+            src_ip = %event.src_ip,
+            metadata = event.metadata,
+            "xdp event"
+        );
+        let Some(blacklist) = &blacklist else {
+            return 0;
+        };
+        if let Some(ban) = auto_ban_decision(&event, &cfg) {
+            let addr = IpAddr::V4(ban.ip);
+            // `Blacklist::add` возвращает `()` (DashMap::insert игнорируется), а
+            // править blacklist.rs вне нашей зоны нельзя — поэтому «новый ли бан»
+            // определяем через публичный `is_blocked` ДО перезаписи. Это дедуп
+            // лога/метрики по активному бану, а не по факту вставки.
+            let already_banned = blacklist.is_blocked(addr);
+            blacklist.add(addr, Duration::from_secs(ban.duration_secs), ban.reason);
+            if already_banned {
+                tracing::debug!(src_ip = %ban.ip, reason = ban.reason, "xdp auto-ban refreshed");
+            } else {
+                XDP_AUTOBANS_TOTAL.inc();
+                tracing::info!(
+                    src_ip = %ban.ip,
+                    reason = ban.reason,
+                    duration_secs = ban.duration_secs,
+                    "xdp auto-ban issued"
+                );
+            }
         }
         0
     })?;

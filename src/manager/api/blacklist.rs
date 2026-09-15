@@ -1,6 +1,9 @@
+#[cfg(feature = "store-redis")]
 use crate::manager::AppState;
+#[cfg(feature = "store-redis")]
 use axum::{Json, extract::State};
 use serde::{Deserialize, Serialize};
+#[cfg(feature = "store-redis")]
 use std::sync::Arc;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -29,6 +32,7 @@ pub struct AddBlacklistRequest {
     pub duration_secs: Option<u64>,
 }
 
+#[cfg(feature = "store-redis")]
 pub async fn list_blacklist(State(state): State<Arc<AppState>>) -> Json<BlacklistResponse> {
     let mut conn = match state.redis_client.get_multiplexed_async_connection().await {
         Ok(c) => c,
@@ -69,6 +73,7 @@ pub async fn list_blacklist(State(state): State<Arc<AppState>>) -> Json<Blacklis
     Json(BlacklistResponse { items, total })
 }
 
+#[cfg(feature = "store-redis")]
 pub async fn add_blacklist(
     State(state): State<Arc<AppState>>,
     Json(req): Json<AddBlacklistRequest>,

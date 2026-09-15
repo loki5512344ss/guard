@@ -1,7 +1,7 @@
 use anyhow::{Result, bail};
 
 use super::types::{
-    AttachMode, BTF_PATH, FilesystemProbe, KernelVersion, MIN_KERNEL, OSRELEASE_PATH, SystemProbe, driver_from_link,
+    AttachMode, BTF_PATH, KernelVersion, MIN_KERNEL, OSRELEASE_PATH, SystemProbe, driver_from_link,
     driver_supports_native_xdp,
 };
 
@@ -109,6 +109,8 @@ impl EnvironmentReport {
 /// См. [`EnvironmentReport::validate`].
 #[cfg(feature = "xdp")]
 pub(crate) fn preflight(interface: &str) -> Result<()> {
+    use super::types::FilesystemProbe;
+
     let report = EnvironmentReport::collect(&FilesystemProbe, interface);
     let kernel = report
         .kernel_version

@@ -12,9 +12,16 @@ mod globals;
 pub use globals::XdpGlobals;
 
 #[cfg(feature = "xdp")]
+mod metrics;
+
+#[cfg(feature = "xdp")]
 mod filter;
 #[cfg(feature = "xdp")]
 pub use filter::XdpFilter;
+#[cfg(feature = "xdp")]
+pub use filter::events::{
+    AutoBanConfig, BanAction, XDP_EVENT_LEN, XdpEvent, XdpEventKind, auto_ban_decision, parse_xdp_event,
+};
 
 #[cfg(feature = "xdp")]
 pub use probe::XdpMetrics;

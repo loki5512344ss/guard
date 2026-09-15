@@ -1,7 +1,11 @@
+#[cfg(feature = "store-redis")]
 use crate::manager::AppState;
+#[cfg(feature = "store-redis")]
 use axum::{Json, extract::State};
+#[cfg(feature = "store-redis")]
 use redis::AsyncCommands;
 use serde::{Deserialize, Serialize};
+#[cfg(feature = "store-redis")]
 use std::sync::Arc;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -19,6 +23,7 @@ pub struct ServersResponse {
     pub servers: Vec<ServerEntry>,
 }
 
+#[cfg(feature = "store-redis")]
 pub async fn list_servers(State(state): State<Arc<AppState>>) -> Json<ServersResponse> {
     let mut conn = match state.redis_client.get_multiplexed_async_connection().await {
         Ok(c) => c,

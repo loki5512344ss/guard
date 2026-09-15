@@ -10,6 +10,9 @@ use std::time::Instant;
 
 /// Общее состояние management-API.
 pub struct AppState {
+    /// Redis-клиент управления состоянием; присутствует только при собранной
+    /// фиче `store-redis` (manager требует её на старте — см. bin/rampart-manager).
+    #[cfg(feature = "store-redis")]
     pub redis_client: redis::Client,
     pub jwt_secret: String,
     pub jwt_audience: String,

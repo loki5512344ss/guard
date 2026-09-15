@@ -1,17 +1,27 @@
+#[cfg(feature = "store-redis")]
 use crate::manager::AppState;
+#[cfg(feature = "store-redis")]
 use futures::StreamExt;
+#[cfg(feature = "store-redis")]
 use redis::AsyncCommands;
+#[cfg(feature = "store-redis")]
 use redis::ScanOptions;
+#[cfg(feature = "store-redis")]
 use std::sync::Arc;
+#[cfg(feature = "store-redis")]
 use tokio::time::{Duration, interval};
 
 /// SCAN pattern for node records (blocking KEYS is forbidden under load).
+#[cfg(feature = "store-redis")]
 const NODES_KEY_PATTERN: &str = "rampart:nodes:*";
 /// SCAN COUNT hint per round.
+#[cfg(feature = "store-redis")]
 const SCAN_BATCH: usize = 100;
 /// Node is offline when the last heartbeat is older than this.
+#[cfg(any(feature = "store-redis", test))]
 const NODE_TTL_SECS: i64 = 60;
 
+#[cfg(feature = "store-redis")]
 pub async fn start_heartbeat_check(state: Arc<AppState>) {
     let mut ticker = interval(Duration::from_secs(30));
     loop {
@@ -22,6 +32,7 @@ pub async fn start_heartbeat_check(state: Arc<AppState>) {
     }
 }
 
+#[cfg(feature = "store-redis")]
 async fn check_nodes(state: &AppState) -> anyhow::Result<()> {
     let mut conn = state.redis_client.get_multiplexed_async_connection().await?;
     let keys = collect_node_keys(&mut conn).await?;
@@ -40,6 +51,7 @@ async fn check_nodes(state: &AppState) -> anyhow::Result<()> {
 }
 
 /// Incrementally iterates the keyspace via SCAN (cursor-based, non-blocking).
+#[cfg(feature = "store-redis")]
 async fn collect_node_keys(conn: &mut redis::aio::MultiplexedConnection) -> anyhow::Result<Vec<String>> {
     let opts = ScanOptions::default()
         .with_pattern(NODES_KEY_PATTERN)
@@ -56,6 +68,7 @@ async fn collect_node_keys(conn: &mut redis::aio::MultiplexedConnection) -> anyh
 /// the RFC3339 `last_heartbeat` is older than `NODE_TTL_SECS` (a missing or
 /// unparseable timestamp counts as expired, matching the previous behavior);
 /// `None` when the node is fresh, unparsable, or not a JSON object.
+#[cfg(any(feature = "store-redis", test))]
 fn offline_update(raw: &str, now: i64) -> Option<String> {
     let mut node = serde_json::from_str::<serde_json::Value>(raw).ok()?;
     let hb = node["last_heartbeat"]
@@ -115,6 +128,7 @@ mod tests {
         assert!(offline_update("not json", 2_000_000).is_none());
     }
 
+    #[cfg(feature = "store-redis")]
     #[test]
     fn node_key_pattern_targets_rampart_nodes() {
         assert_eq!(NODES_KEY_PATTERN, "rampart:nodes:*");
