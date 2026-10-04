@@ -11,7 +11,7 @@ use crate::config::XdpConfig;
 use crate::filter::blacklist::Blacklist;
 use crate::traffic::prefix::{PrefixKey, PrefixStatsVal};
 
-use attach::{build_ringbuf, interface_cstr, patch_rodata};
+use attach::{build_ringbuf, interface_cstr, patch_rodata, xdp_attach_mode_name};
 use events::AutoBanConfig;
 use maps::{blacklist_expiry_ns, blacklist_key, unix_ns};
 
@@ -62,7 +62,11 @@ impl XdpFilter {
         super::probe::preflight(&self.interface)?;
 
         let bpf_obj = include_bytes!(concat!(env!("OUT_DIR"), "/universal_filter.o"));
+        // Имя объекта задаётся ЯВНО: при open_memory libbpf не знает имени файла,
+        // а по нему именуются внутренние maps ("rampart_.rodata" в patch_rodata).
         let mut open_obj = ObjectBuilder::default()
+            .name("rampart")
+            .context("failed to set BPF object name")?
             .open_memory(bpf_obj)
             .context("Failed to open XDP object")?;
         patch_rodata(&mut open_obj, &self.globals)?;
@@ -83,27 +87,48 @@ impl XdpFilter {
             .progs()
             .find(|p| p.name() == "rampart_universal_filter")
             .context("XDP program 'rampart_universal_filter' not found")?;
-        Xdp::new(prog.as_fd()).attach(ifindex as i32, XdpFlags::NONE)?;
+        let xdp = Xdp::new(prog.as_fd());
+        // Лестница режимов: пробуем native (drv); если драйвер не тянет —
+        // честный fallback в generic (skb) с предупреждением (вывод №1 из
+        // конкурентного анализа: печатать режим как есть, без вранья).
+        let ifindex = ifindex as i32;
+        if let Err(e) = xdp.attach(ifindex, XdpFlags::NONE) {
+            tracing::warn!(
+                interface = %self.interface,
+                error = %e,
+                "native XDP attach failed, falling back to generic (skb) mode"
+            );
+            xdp.attach(ifindex, XdpFlags::SKB_MODE)
+                .context("XDP attach failed in both native and generic modes")?;
+        }
+        let mode = xdp
+            .query(ifindex, XdpFlags::NONE)
+            .map(|q| xdp_attach_mode_name(q.attach_mode))
+            .unwrap_or("unknown");
 
         super::metrics::init();
         let rbuf = build_ringbuf(&obj, self.blacklist.clone(), self.autoban)?;
 
         self.obj = Some(obj);
         self.ringbuf = Some(rbuf);
-        self.ifindex = ifindex as i32;
-        tracing::info!("XDP filter attached to {}", self.interface);
+        self.ifindex = ifindex;
+        tracing::info!("XDP filter attached to {} (mode: {mode})", self.interface);
         Ok(())
     }
 
     pub fn unload(&mut self) -> Result<()> {
+        let was_attached = self.obj.is_some();
+        let mut result = Ok(());
         if let Some(obj) = self.obj.as_ref() {
-            self.detach_program(obj)?;
+            result = self.detach_program(obj);
         }
         self.ringbuf = None;
         self.obj = None;
         self.ifindex = 0;
-        tracing::info!("XDP filter detached from {}", self.interface);
-        Ok(())
+        if was_attached {
+            tracing::info!("XDP filter detached from {}", self.interface);
+        }
+        result
     }
 
     /// Detaches the XDP program using the real program fd owned by the loaded

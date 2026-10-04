@@ -28,7 +28,11 @@ use anyhow::{Context, Result, bail};
 use crate::config::XdpConfig;
 
 /// Имя карты с образом `.rodata` загруженного BPF-объекта.
-pub(crate) const RODATA_MAP_NAME: &str = "rampart_.rodata";
+/// Имя внутренней `.rodata`-карты при `ObjectBuilder::name("rampart")`:
+/// libbpf конструирует `<obj_name><section>` без замены точки (sanitizer
+/// пропускаёт `.`; libbpf.c, map name logic) → `rampart.rodata`.
+/// Поиск в `patch_rodata` всё равно по суффиксу — имя здесь для диагностики.
+pub(crate) const RODATA_MAP_NAME: &str = "rampart.rodata";
 
 /// Размер образа `.rodata` в байтах (см. `build_rodata_image`).
 pub const RODATA_SIZE: usize = 96;

@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use libbpf_rs::{MapCore, Object, OpenObject, RingBuffer, RingBufferBuilder};
 use std::ffi::CString;
 use std::net::IpAddr;
@@ -18,15 +18,43 @@ pub(super) fn interface_cstr(name: &str) -> Result<CString> {
     CString::new(name).with_context(|| format!("interface name {name:?} contains an interior NUL byte"))
 }
 
-/// Патчит карту `rampart_.rodata` (volatile const глобалы) ДО загрузки объекта.
+/// Внутренний data-map `.rodata` ищется по суффиксу: libbpf именует его
+/// `<obj_name>.rodata`, а имя объекта при `open_memory` без явного `.name()`
+/// вообще `memory` — точное сравнение ломалось на живом ядре (smoke-тест).
+pub(super) fn is_rodata_map(name: &str) -> bool {
+    name.ends_with(".rodata")
+}
+
+/// Патчит карту `*.rodata` (volatile const глобалы) ДО загрузки объекта.
 pub(super) fn patch_rodata(open_obj: &mut OpenObject, globals: &XdpGlobals) -> Result<()> {
     let image = globals.build_rodata_image();
+    if !open_obj
+        .maps_mut()
+        .any(|m| m.name().to_str().is_some_and(is_rodata_map))
+    {
+        let names: Vec<String> = open_obj
+            .maps()
+            .map(|m| m.name().to_string_lossy().into_owned())
+            .collect();
+        bail!("no .rodata map ('{RODATA_MAP_NAME}') in XDP object, maps: {names:?}");
+    }
     let mut map = open_obj
         .maps_mut()
-        .find(|m| m.name() == RODATA_MAP_NAME)
-        .with_context(|| format!("map '{RODATA_MAP_NAME}' not found in XDP object"))?;
+        .find(|m| m.name().to_str().is_some_and(is_rodata_map))
+        .context("rodata map vanished between passes")?;
     map.set_initial_value(&image)
         .with_context(|| format!("failed to set initial value of '{RODATA_MAP_NAME}'"))
+}
+
+/// Честное имя режима attach по `attach_mode` из `bpf_xdp_query_opts`
+/// (kernel `enum xdp_attached_mode`: NONE=0, DRV=1, OFFLOAD=2, SKB=3).
+pub(super) fn xdp_attach_mode_name(mode: u8) -> &'static str {
+    match mode {
+        1 => "native (drv)",
+        2 => "hardware offload",
+        3 => "generic (skb)",
+        _ => "none",
+    }
 }
 
 /// Собирает ringbuf-колбэк для `events_map`.
@@ -102,5 +130,24 @@ mod tests {
     #[test]
     fn interface_cstr_rejects_interior_nul() {
         assert!(interface_cstr("et\0h0").is_err());
+    }
+
+    #[test]
+    fn rodata_map_matches_libbpf_naming() {
+        // libbpf строит имя `<obj><section>` без замены точки (libbpf.c ~1911),
+        // при open_memory без name объект называется "memory":
+        assert!(is_rodata_map("rampart.rodata"));
+        assert!(is_rodata_map("memory.rodata"));
+        assert!(is_rodata_map(".rodata"));
+        assert!(!is_rodata_map("rampart.bss"));
+        assert!(!is_rodata_map("stats_map"));
+    }
+
+    #[test]
+    fn attach_mode_names_are_honest() {
+        assert_eq!(xdp_attach_mode_name(1), "native (drv)");
+        assert_eq!(xdp_attach_mode_name(3), "generic (skb)");
+        assert_eq!(xdp_attach_mode_name(2), "hardware offload");
+        assert_eq!(xdp_attach_mode_name(0), "none");
     }
 }
