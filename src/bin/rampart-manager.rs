@@ -69,10 +69,12 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/v1/servers", get(api::inventory::servers::list_servers))
         .route(
             "/api/v1/blacklist",
-            get(api::blacklist::list_blacklist).post(api::blacklist::add_blacklist),
+            get(api::blacklist::list_blacklist)
+                .post(api::blacklist::add_blacklist)
+                .delete(api::blacklist::remove_blacklist),
         )
         .route("/api/v1/nodes", get(api::inventory::nodes::list_nodes));
-    let protected = protected.route_layer(middleware::from_fn(auth::auth_middleware));
+    let protected = protected.route_layer(middleware::from_fn_with_state(state.clone(), auth::auth_middleware));
 
     let cors = match std::env::var("CORS_ORIGIN") {
         Ok(origin) if origin.is_empty() || origin == "*" => CorsLayer::new().allow_origin(tower_http::cors::Any),

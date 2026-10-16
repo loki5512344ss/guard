@@ -1,0 +1,56 @@
+# Minecraft Java edge configuration for deploy/docker-compose.yml.
+whitelist = ["127.0.0.1", "::1"]
+
+[bind]
+address = "0.0.0.0"
+port = 25565
+
+[backend]
+# Docker host address; expose this backend port only to trusted Rampart nodes.
+upstreams = ["host.docker.internal:25566"]
+
+[protocol.minecraft]
+enabled = true
+max_frame_bytes = 8192
+timeout_secs = 5
+send_proxy_protocol = false
+
+[workers]
+count = 4
+
+[limits]
+handshake_timeout_secs = 5
+max_connections_per_ip = 10
+rate_limit_pps = 5.0
+rate_limit_burst = 10.0
+
+[ban]
+ban_duration_secs = 3600
+
+[store]
+redis_url = "redis://redis:6379/0"
+blacklist_cache_ttl_secs = 300
+clickhouse_url = ""
+
+[xdp]
+enabled = false
+interface = "eth0"
+
+[logging]
+level = "info"
+format = "text"
+
+[metrics]
+enabled = true
+port = 9090
+
+[pow]
+enabled = false
+difficulty = 4
+
+# Enable only when a trusted upstream TCP proxy sends PROXY protocol v2.
+[proxy_protocol]
+ingress_enabled = false
+trusted_cidrs = []
+ingress_timeout_ms = 750
+max_header_bytes = 512

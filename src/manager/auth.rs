@@ -1,5 +1,6 @@
 use axum::Json;
 use axum::body::Body;
+use axum::extract::State;
 use axum::http::{Request, StatusCode};
 use axum::middleware::Next;
 use axum::response::Response;
@@ -36,6 +37,7 @@ pub fn verify_token(token: &str, secret: &str, audience: &str) -> Result<Claims,
 }
 
 pub async fn auth_middleware(
+    State(state): State<Arc<crate::manager::AppState>>,
     request: Request<Body>,
     next: Next,
 ) -> Result<Response, (StatusCode, Json<serde_json::Value>)> {
@@ -51,16 +53,6 @@ pub async fn auth_middleware(
             return Err((
                 StatusCode::UNAUTHORIZED,
                 Json(serde_json::json!({"error": "unauthorized"})),
-            ));
-        },
-    };
-
-    let state = match request.extensions().get::<Arc<crate::manager::AppState>>() {
-        Some(s) => s,
-        None => {
-            return Err((
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": "internal error"})),
             ));
         },
     };

@@ -1,5 +1,7 @@
 #[cfg(feature = "protocol-http")]
 pub mod http;
+#[cfg(feature = "protocol-minecraft")]
+pub mod minecraft;
 
 use std::future::Future;
 use std::pin::Pin;
@@ -16,6 +18,30 @@ impl Upstream {
     #[must_use]
     pub fn new(addr: impl Into<String>) -> Self {
         Self { addr: addr.into() }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HandshakeResult {
+    pub upstream: Upstream,
+    pub initial_backend_data: Vec<u8>,
+}
+
+impl HandshakeResult {
+    #[must_use]
+    pub fn new(upstream: Upstream) -> Self {
+        Self {
+            upstream,
+            initial_backend_data: Vec::new(),
+        }
+    }
+
+    #[must_use]
+    pub fn with_initial_data(upstream: Upstream, initial_backend_data: Vec<u8>) -> Self {
+        Self {
+            upstream,
+            initial_backend_data,
+        }
     }
 }
 
@@ -39,7 +65,7 @@ pub trait ProtocolHandler: Send + Sync {
     fn handshake<'a>(
         &'a self,
         stream: &'a mut TcpStream,
-    ) -> Pin<Box<dyn Future<Output = anyhow::Result<Upstream>> + Send + 'a>>;
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<HandshakeResult>> + Send + 'a>>;
 }
 
 /// Реестр скомпилированных протокольных обработчиков.
@@ -108,8 +134,8 @@ mod tests {
         fn handshake<'a>(
             &'a self,
             _stream: &'a mut TcpStream,
-        ) -> Pin<Box<dyn Future<Output = anyhow::Result<Upstream>> + Send + 'a>> {
-            Box::pin(async { Ok(Upstream::new("127.0.0.1:9000")) })
+        ) -> Pin<Box<dyn Future<Output = anyhow::Result<HandshakeResult>> + Send + 'a>> {
+            Box::pin(async { Ok(HandshakeResult::new(Upstream::new("127.0.0.1:9000"))) })
         }
     }
 

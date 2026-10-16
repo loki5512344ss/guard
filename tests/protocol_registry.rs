@@ -1,7 +1,7 @@
 use std::future::Future;
 use std::pin::Pin;
 
-use rampart::protocol::{ProtocolHandler, ProtocolRegistry, Upstream};
+use rampart::protocol::{HandshakeResult, ProtocolHandler, ProtocolRegistry, Upstream};
 use tokio::net::TcpStream;
 
 struct NoopHandler;
@@ -14,8 +14,8 @@ impl ProtocolHandler for NoopHandler {
     fn handshake<'a>(
         &'a self,
         _stream: &'a mut TcpStream,
-    ) -> Pin<Box<dyn Future<Output = anyhow::Result<Upstream>> + Send + 'a>> {
-        Box::pin(async { Ok(Upstream::new("127.0.0.1:9000")) })
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<HandshakeResult>> + Send + 'a>> {
+        Box::pin(async { Ok(HandshakeResult::new(Upstream::new("127.0.0.1:9000"))) })
     }
 }
 

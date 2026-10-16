@@ -3,16 +3,16 @@
 //! Первый plugin-реализаций [`ProtocolHandler`]: читает request-head
 //! постепенно (TCP приходит фрагментами), проверяет его по политике из
 //! секции `[protocol.http]` и возвращает upstream для туннелирования.
-//! Голова читается через `peek`, чтобы байты остались в сокете и движок
-//! проксировал запрос на backend без потерь.
+//! Прочитанная голова передаётся upstream как начальные байты туннеля.
 
 mod parser;
 
 use crate::config::HttpProtocolConfig;
-use crate::protocol::{ProtocolHandler, Upstream};
+use crate::protocol::{HandshakeResult, ProtocolHandler, Upstream};
 use std::future::Future;
 use std::pin::Pin;
 use std::time::Duration;
+use tokio::io::AsyncReadExt;
 use tokio::net::TcpStream;
 
 /// Обработчик HTTP/1.1: verdict Allow → tunnel на upstream, Reject → drop.
@@ -37,31 +37,27 @@ impl HttpProtocolHandler {
         }
     }
 
-    /// Накапливает request-head через `peek` до терминатора или лимита.
+    /// Накапливает request-head без повторного чтения одного и того же префикса.
     ///
     /// # Errors
     /// Таймаут, закрытие клиента, превышение `max_header_bytes` или ошибка I/O.
-    async fn read_head(&self, stream: &TcpStream) -> anyhow::Result<Vec<u8>> {
+    async fn read_head(&self, stream: &mut TcpStream) -> anyhow::Result<Vec<u8>> {
         let limit = self.policy.max_header_bytes;
         if limit == 0 {
             anyhow::bail!("protocol.http.max_header_bytes must be positive");
         }
-        let mut buf = vec![0u8; limit];
-        let mut len = 0usize;
+        let mut buf = Vec::with_capacity(limit);
         let accumulate = async {
             loop {
-                if let Some(head_len) = parser::scan_head(&buf[..len]) {
-                    buf.truncate(head_len);
+                if parser::scan_head(&buf).is_some() {
                     return Ok(buf);
                 }
-                if len >= limit {
+                if buf.len() >= limit {
                     anyhow::bail!("request head exceeds {limit} bytes");
                 }
-                let n = stream.peek(&mut buf[len..]).await?;
-                if n == 0 {
-                    anyhow::bail!("client closed connection before head was complete");
-                }
-                len += n;
+                let mut byte = [0u8; 1];
+                stream.read_exact(&mut byte).await?;
+                buf.push(byte[0]);
             }
         };
         match tokio::time::timeout(self.timeout, accumulate).await {
@@ -79,11 +75,14 @@ impl ProtocolHandler for HttpProtocolHandler {
     fn handshake<'a>(
         &'a self,
         stream: &'a mut TcpStream,
-    ) -> Pin<Box<dyn Future<Output = anyhow::Result<Upstream>> + Send + 'a>> {
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<HandshakeResult>> + Send + 'a>> {
         Box::pin(async move {
             let head = self.read_head(stream).await?;
             match parser::evaluate(&head, &self.policy) {
-                parser::Verdict::Allow { .. } => Ok(Upstream::new(self.upstream.clone())),
+                parser::Verdict::Allow { .. } => Ok(HandshakeResult::with_initial_data(
+                    Upstream::new(self.upstream.clone()),
+                    head,
+                )),
                 parser::Verdict::Reject { reason } => Err(anyhow::anyhow!("http: {reason}")),
             }
         })
@@ -104,9 +103,9 @@ mod tests {
         let client = tokio::net::TcpStream::connect(listener.local_addr().expect("addr"))
             .await
             .expect("connect");
-        let (server, _) = listener.accept().await.expect("accept");
+        let (mut server, _) = listener.accept().await.expect("accept");
         drop(listener);
-        assert!(handler.read_head(&server).await.is_err());
+        assert!(handler.read_head(&mut server).await.is_err());
         drop(client);
     }
 }

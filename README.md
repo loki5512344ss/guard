@@ -54,7 +54,7 @@ Protocol-specific logic lives in **modular protocol plugins**, so the same platf
 │    L7 handshake analysis · rate limit · HMAC · death-code patterns │
 ├────────────────────────────────────────────────────────────────────┤
 │  Layer 4: Protocol Plugins (feature crates)                        │
-│    http (feature protocol-http) · grpc (planned)                   │
+│    http (protocol-http) · Minecraft Java (protocol-minecraft) · grpc (planned) │
 └────────────────────────────────────────────────────────────────────┘
           Traffic Intel (EWMA thresholds, profiling, reputation)
                     runs across all layers
@@ -75,6 +75,7 @@ Attacker → [XDP/eBPF] → [PoW] → [Userspace Core] → [Plugin] → Your Ser
 | **rampart-tui** | Live metrics terminal dashboard, polls the Prometheus `/metrics` endpoint | Rust (ratatui) |
 | **protocol plugins** | Protocol-aware filtering as feature crates | Rust |
 | ↳ `http` | HTTP/1.1 handler, compiled with the `protocol-http` feature | Rust |
+| ↳ `minecraft` | Minecraft Java TCP handshake and tunnel, compiled with `protocol-minecraft` | Rust |
 | ↳ `grpc` | Planned | Rust |
 | **docs/kb** | Bilingual knowledge base: attack anatomy, defense levels, practice guides | Markdown |
 
@@ -93,16 +94,25 @@ Full benchmark suite in progress.
 ### Quick Start
 
 ```bash
-# Build (the HTTP protocol handler is a feature)
+# Build the HTTP edge handler
 cargo build --release --features protocol-http
 
 # Install the default config
 sudo mkdir -p /etc/rampart
-sudo cp deploy/config/edge.toml /etc/rampart/config.toml
+sudo cp deploy/config/edge-http.toml /etc/rampart/config.toml
 
 # Run edge node (config path comes from $RAMPART_CONFIG, default /etc/rampart/config.toml)
 RAMPART_CONFIG=/etc/rampart/config.toml ./target/release/rampart
 ```
+
+### Minecraft Java Edge
+
+Rampart also has an early Minecraft Java TCP handler. Build it with
+`cargo build --release --features protocol-minecraft --bin rampart`, copy
+`deploy/config/edge.toml` as its config, and follow
+[docs/minecraft-java.md](docs/minecraft-java.md) for Paper PROXY-protocol and
+private-backend setup. This handler does not protect an already-saturated home
+uplink; use a DDoS-filtering game proxy/provider in front of the edge.
 
 ### Documentation
 
@@ -113,6 +123,7 @@ RAMPART_CONFIG=/etc/rampart/config.toml ./target/release/rampart
 | [docs/research/load-test-report.md](docs/research/load-test-report.md) | VDS stress test report (2026-08-04) |
 | [docs/research/](docs/research/) | Research notes: eBPF, anti-bot, DDoS vectors, networking |
 | [docs/deployment.md](docs/deployment.md) | Deployment guide |
+| [docs/minecraft-java.md](docs/minecraft-java.md) | Minecraft Java edge and Paper setup |
 | [docs/configuration.md](docs/configuration.md) | Configuration reference |
 | [docs/runbook.md](docs/runbook.md) | Operations runbook |
 
@@ -153,7 +164,7 @@ Rampart фильтрует трафик на трёх уровнях до тог
 │    L7 handshake analysis · rate limit · HMAC · death-code паттерны │
 ├────────────────────────────────────────────────────────────────────┤
 │  Слой 4: Протокол-плагины (feature crates)                         │
-│    http (feature protocol-http) · grpc (в планах)                  │
+│    http (protocol-http) · Minecraft Java (protocol-minecraft) · grpc (в планах) │
 └────────────────────────────────────────────────────────────────────┘
      Traffic Intel (EWMA thresholds, профилирование, репутация)
                  работает поперёк всех слоёв
@@ -174,6 +185,7 @@ Rampart фильтрует трафик на трёх уровнях до тог
 | **rampart-tui** | Терминальный дашборд live-метрик, опрашивает Prometheus `/metrics` | Rust (ratatui) |
 | **Протокол-плагины** | Протоколозависимая фильтрация в виде feature crates | Rust |
 | ↳ `http` | HTTP/1.1-обработчик, собирается с фичей `protocol-http` | Rust |
+| ↳ `minecraft` | TCP-handshake и туннель Minecraft Java, фича `protocol-minecraft` | Rust |
 | ↳ `grpc` | В планах | Rust |
 | **docs/kb** | Двуязычная база знаний: анатомия атак, уровни защиты, практические руководства | Markdown |
 
@@ -192,16 +204,26 @@ Rampart фильтрует трафик на трёх уровнях до тог
 ### Быстрый старт
 
 ```bash
-# Сборка (HTTP-обработчик собирается фичей)
+# Сборка HTTP-обработчика
 cargo build --release --features protocol-http
 
 # Установка дефолтного конфига
 sudo mkdir -p /etc/rampart
-sudo cp deploy/config/edge.toml /etc/rampart/config.toml
+sudo cp deploy/config/edge-http.toml /etc/rampart/config.toml
 
 # Запуск edge ноды (путь конфига берётся из $RAMPART_CONFIG, по умолчанию /etc/rampart/config.toml)
 RAMPART_CONFIG=/etc/rampart/config.toml ./target/release/rampart
 ```
+
+### Minecraft Java Edge
+
+В проекте появился ранний TCP-обработчик Minecraft Java. Соберите его командой
+`cargo build --release --features protocol-minecraft --bin rampart`, скопируйте
+`deploy/config/edge.toml` как конфиг и настройте
+Paper и закрытый backend по инструкции
+[docs/minecraft-java.md](docs/minecraft-java.md). Сам Rampart не спасёт домашний
+канал, если атака уже забила его: перед edge нужен игровой прокси или провайдер
+с фильтрацией DDoS.
 
 ### Документация
 
@@ -212,6 +234,7 @@ RAMPART_CONFIG=/etc/rampart/config.toml ./target/release/rampart
 | [docs/research/load-test-report.md](docs/research/load-test-report.md) | Отчёт по VDS stress test (2026-08-04) |
 | [docs/research/](docs/research/) | Research-заметки: eBPF, антибот, векторы DDoS, сети |
 | [docs/deployment.md](docs/deployment.md) | Руководство по деплою |
+| [docs/minecraft-java.md](docs/minecraft-java.md) | Minecraft Java edge и настройка Paper |
 | [docs/configuration.md](docs/configuration.md) | Справочник конфигурации |
 | [docs/runbook.md](docs/runbook.md) | Операционный runbook |
 

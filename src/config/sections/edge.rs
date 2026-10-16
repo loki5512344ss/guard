@@ -1,4 +1,6 @@
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::str::FromStr;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct BindConfig {
@@ -132,4 +134,111 @@ impl Default for PowConfig {
 
 fn default_pow_difficulty() -> u8 {
     4
+}
+
+/// CIDR network allowed to send inbound PROXY protocol headers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TrustedProxyCidr {
+    network: IpAddr,
+    prefix_len: u8,
+}
+
+impl TrustedProxyCidr {
+    #[must_use]
+    pub fn contains(&self, ip: IpAddr) -> bool {
+        match (self.network, ip) {
+            (IpAddr::V4(network), IpAddr::V4(ip)) => {
+                let mask = if self.prefix_len == 0 {
+                    0
+                } else {
+                    u32::MAX << (32 - self.prefix_len)
+                };
+                u32::from(network) & mask == u32::from(ip) & mask
+            },
+            (IpAddr::V6(network), IpAddr::V6(ip)) => {
+                let mask = if self.prefix_len == 0 {
+                    0
+                } else {
+                    u128::MAX << (128 - self.prefix_len)
+                };
+                u128::from(network) & mask == u128::from(ip) & mask
+            },
+            _ => false,
+        }
+    }
+}
+
+impl FromStr for TrustedProxyCidr {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        let (address, prefix) = match value.split_once('/') {
+            Some((address, prefix)) => (address, Some(prefix)),
+            None => (value, None),
+        };
+        let network = IpAddr::from_str(address).map_err(|_| format!("invalid trusted proxy CIDR: {value}"))?;
+        let max_prefix = if network.is_ipv4() { 32 } else { 128 };
+        let prefix_len = match prefix {
+            Some(prefix) => prefix
+                .parse::<u8>()
+                .map_err(|_| format!("invalid trusted proxy CIDR prefix: {value}"))?,
+            None => max_prefix,
+        };
+        if prefix_len > max_prefix {
+            return Err(format!("trusted proxy CIDR prefix is too large: {value}"));
+        }
+        let network = match network {
+            IpAddr::V4(ip) => IpAddr::V4(Ipv4Addr::from(u32::from(ip) & mask_v4(prefix_len))),
+            IpAddr::V6(ip) => IpAddr::V6(Ipv6Addr::from(u128::from(ip) & mask_v6(prefix_len))),
+        };
+        Ok(Self { network, prefix_len })
+    }
+}
+
+impl<'de> Deserialize<'de> for TrustedProxyCidr {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        value.parse().map_err(serde::de::Error::custom)
+    }
+}
+
+fn mask_v4(prefix: u8) -> u32 {
+    if prefix == 0 { 0 } else { u32::MAX << (32 - prefix) }
+}
+
+fn mask_v6(prefix: u8) -> u128 {
+    if prefix == 0 { 0 } else { u128::MAX << (128 - prefix) }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ProxyProtocolConfig {
+    #[serde(default)]
+    pub ingress_enabled: bool,
+    #[serde(default)]
+    pub trusted_cidrs: Vec<TrustedProxyCidr>,
+    #[serde(default = "default_proxy_protocol_timeout_ms")]
+    pub ingress_timeout_ms: u64,
+    #[serde(default = "default_proxy_protocol_max_header_bytes")]
+    pub max_header_bytes: usize,
+}
+
+impl Default for ProxyProtocolConfig {
+    fn default() -> Self {
+        Self {
+            ingress_enabled: false,
+            trusted_cidrs: Vec::new(),
+            ingress_timeout_ms: default_proxy_protocol_timeout_ms(),
+            max_header_bytes: default_proxy_protocol_max_header_bytes(),
+        }
+    }
+}
+
+fn default_proxy_protocol_timeout_ms() -> u64 {
+    750
+}
+fn default_proxy_protocol_max_header_bytes() -> usize {
+    512
 }

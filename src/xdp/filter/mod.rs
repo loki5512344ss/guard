@@ -1,7 +1,5 @@
 use anyhow::{Context, Result, bail};
 use libbpf_rs::{MapCore, MapFlags, Object, ObjectBuilder, RingBuffer, Xdp, XdpFlags};
-use std::net::IpAddr;
-use std::net::Ipv4Addr;
 use std::os::unix::io::AsFd;
 use std::sync::Arc;
 
@@ -13,7 +11,6 @@ use crate::traffic::prefix::{PrefixKey, PrefixStatsVal};
 
 use attach::{build_ringbuf, interface_cstr, patch_rodata, xdp_attach_mode_name};
 use events::AutoBanConfig;
-use maps::{blacklist_expiry_ns, blacklist_key, unix_ns};
 
 mod attach;
 pub(crate) mod events;
@@ -166,36 +163,6 @@ impl XdpFilter {
             .maps()
             .find(|m| m.name() == name)
             .with_context(|| format!("map '{}' not found", name))
-    }
-
-    pub fn ban_ip(&self, ip: Ipv4Addr, duration_secs: u64) -> Result<()> {
-        self.blacklist_update(32, &ip.octets(), duration_secs)
-    }
-
-    /// Бан CIDR через `blacklist_map` (LPM trie): длина префикса в key[0].
-    ///
-    /// # Errors
-    /// XDP не загружен, IPv6-префиксы (ядро их пока не банит) или ошибка карты.
-    pub fn ban_cidr(&self, prefix: IpAddr, prefix_len: u8, duration_secs: u64) -> Result<()> {
-        let IpAddr::V4(net) = prefix else {
-            bail!("ipv6 cidr bans not supported yet");
-        };
-        self.blacklist_update(prefix_len, &net.octets(), duration_secs)
-    }
-
-    fn blacklist_update(&self, prefix_len: u8, v4: &[u8; 4], duration_secs: u64) -> Result<()> {
-        let map = self.find_map("blacklist_map")?;
-        let key = blacklist_key(prefix_len, v4);
-        let expiry_ns = blacklist_expiry_ns(unix_ns(), duration_secs);
-        map.update(&key, &expiry_ns.to_le_bytes(), MapFlags::ANY)?;
-        Ok(())
-    }
-
-    pub fn unban_ip(&self, ip: Ipv4Addr) -> Result<()> {
-        let map = self.find_map("blacklist_map")?;
-        let key = blacklist_key(32, &ip.octets());
-        map.delete(&key)?;
-        Ok(())
     }
 
     /// Читает карту `prefix_stats` (агрегаты по префиксам /24 и /64).
