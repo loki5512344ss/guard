@@ -2,6 +2,16 @@ use dashmap::DashMap;
 use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use tokio::sync::broadcast;
+
+const LOCAL_BAN_EVENT_CAPACITY: usize = 4096;
+
+#[derive(Clone, Debug)]
+pub struct LocalBanEvent {
+    pub ip: IpAddr,
+    pub expires_at_unix: i64,
+    pub reason: String,
+}
 
 struct BanEntry {
     expires: Instant,
@@ -11,6 +21,7 @@ struct BanEntry {
 pub struct Blacklist {
     entries: Arc<DashMap<IpAddr, BanEntry>>,
     redis_entries: Arc<DashMap<IpAddr, BanEntry>>,
+    local_ban_events: broadcast::Sender<LocalBanEvent>,
 }
 
 impl Default for Blacklist {
@@ -21,9 +32,11 @@ impl Default for Blacklist {
 
 impl Blacklist {
     pub fn new() -> Self {
+        let (local_ban_events, _) = broadcast::channel(LOCAL_BAN_EVENT_CAPACITY);
         Self {
             entries: Arc::new(DashMap::new()),
             redis_entries: Arc::new(DashMap::new()),
+            local_ban_events,
         }
     }
 
@@ -32,6 +45,11 @@ impl Blacklist {
     }
 
     pub fn add(&self, ip: IpAddr, duration: Duration, reason: &str) {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let expires_at_unix = now.saturating_add(duration.as_secs()).min(i64::MAX as u64) as i64;
         self.entries.insert(
             ip,
             BanEntry {
@@ -39,6 +57,32 @@ impl Blacklist {
                 _reason: reason.to_string(),
             },
         );
+        let _ = self.local_ban_events.send(LocalBanEvent {
+            ip,
+            expires_at_unix,
+            reason: reason.to_string(),
+        });
+    }
+
+    pub fn subscribe_local_bans(&self) -> broadcast::Receiver<LocalBanEvent> {
+        self.local_ban_events.subscribe()
+    }
+
+    pub fn local_snapshot(&self) -> Vec<LocalBanEvent> {
+        self.entries
+            .iter()
+            .filter(|entry| entry.expires > Instant::now())
+            .map(|entry| LocalBanEvent {
+                ip: *entry.key(),
+                expires_at_unix: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs()
+                    .saturating_add(entry.expires.saturating_duration_since(Instant::now()).as_secs())
+                    .min(i64::MAX as u64) as i64,
+                reason: entry._reason.clone(),
+            })
+            .collect()
     }
 
     pub fn remove(&self, ip: IpAddr) {

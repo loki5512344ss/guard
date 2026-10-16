@@ -85,6 +85,12 @@ cargo run --release --bin rampart-manager
 docker compose up -d redis clickhouse grafana
 ```
 
+Для нескольких edge и Manager укажи один и тот же защищённый Redis endpoint в
+`store.redis_url` каждого edge и `REDIS_URL` Manager. Edge передаёт туда
+локальные автобаны и восстанавливает общие bans после переподключения. Открой
+Redis только через private network/VPN; при пустом `redis_url` edge остаётся
+автономным, и автобаны между узлами не распространяются.
+
 ## 5. Docker
 
 ```bash

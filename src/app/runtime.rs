@@ -93,6 +93,19 @@ pub async fn run() -> anyhow::Result<RunExit> {
                     return;
                 },
             };
+            let local_events = bl.subscribe_local_bans();
+            let publisher_client = client.clone();
+            let publisher_blacklist = bl.clone();
+            let publisher_shutdown = sd.clone();
+            tokio::spawn(async move {
+                crate::store::start_local_ban_publisher(
+                    publisher_client,
+                    publisher_blacklist,
+                    local_events,
+                    publisher_shutdown,
+                )
+                .await;
+            });
             crate::store::start_blacklist_sync(&client, bl, sd).await;
         });
     }
