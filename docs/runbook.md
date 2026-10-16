@@ -39,18 +39,10 @@ rampart-cli blacklist list
 # C) Доверенные IP (мониторинг, админы) → whitelist в config.toml
 #    (только IP-адреса), затем systemctl restart rampart
 
-# D) Повысить стоимость флуда → включить PoW:
-#    [pow]
-#    enabled = true
-#    difficulty = 5
-systemctl restart rampart
+# D) Для Minecraft Java PoW не включай: он несовместим с протоколом.
+#    Проверь фильтрацию трафика у upstream game-proxy и его лимиты.
 
 # ── ШАГ 4: Если не помогает ──
-
-# Emergency mode (через CLI):
-rampart-cli emergency enable
-# ... и обратно после атаки:
-rampart-cli emergency disable
 
 # В крайнем случае — закрыть порт на firewall и разбираться:
 iptables -A INPUT -p tcp --dport 25565 -j DROP
@@ -66,6 +58,8 @@ clickhouse-client --query "SELECT count() FROM rampart.events WHERE event_type='
 > Честно: hot-reload конфига не реализован — изменения применяются рестартом.
 > ASN/CIDR-баны, GeoIP-блокировки стран и выбор типов challenge через CLI не
 > реализованы; blacklist принимает цели в том виде, в котором их хранит Manager.
+> Команды `emergency`, `drain` и `config set` пока не реализованы и завершатся
+> явной ошибкой вместо изменения состояния.
 
 ## 2. Edge нода не стартует
 
@@ -142,13 +136,9 @@ clickhouse-client --query "ALTER TABLE rampart.events MODIFY TTL ts + INTERVAL 9
 ```bash
 rampart-cli status                        # Общее состояние системы
 rampart-cli doctor                        # Полная диагностика
-rampart-cli config get <key>              # Получить параметр
-rampart-cli config set <key> <value>      # Установить параметр
 rampart-cli blacklist add <target> [reason]
 rampart-cli blacklist remove <target>
 rampart-cli blacklist list
-rampart-cli emergency enable|disable      # Emergency mode
-rampart-cli drain <node>                  # Плавно вывести ноду
 ```
 
 Полный список: `rampart-cli --help` (источник — src/bin/rampart-cli.rs).

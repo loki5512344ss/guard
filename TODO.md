@@ -151,10 +151,10 @@ guard/
   bin-файлы тонкие (rampart.rs: 330 → 6 строк).
 
 ### Новые найденные проблемы (чинить в v0.4)
-- [ ] Redis blacklist: сохранять срок/причину бана и восстанавливать edge-состояние после reconnect;
-      Pub/Sub сейчас только для подключённых узлов.
+- [x] Redis blacklist: срок/причина сохраняются; edge восстанавливает снимок после reconnect;
+      локальные autoban-события публикуются в Redis с retry и absolute expiry.
 - [ ] Minecraft Java: Velocity modern forwarding, игровые netns smoke-тесты и нагрузочная проверка.
-- [ ] Принимать client IP от внешнего DDoS-прокси через доверенный inbound PROXY protocol.
+- [x] Принимать client IP от внешнего DDoS-прокси через доверенные CIDR и ограниченный PROXY v2 parser.
 - [x] `cargo check --no-default-features` починен (2026-09-15, раунд 2): redis-код в
       manager/sync/api/store/app закрыт `#[cfg(feature = "store-redis")]`, менеджер без фичи fail-fast'ит на старте;
       CI теперь гоняет `cargo check --no-default-features --all-targets` гейтом.

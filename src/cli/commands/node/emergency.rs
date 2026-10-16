@@ -1,11 +1,7 @@
 pub async fn enable() -> anyhow::Result<()> {
-    println!("Emergency mode ENABLED");
-    println!("Only whitelisted IPs will be allowed through.");
-    Ok(())
+    anyhow::bail!("emergency mode is not implemented; change the edge policy and restart Rampart")
 }
 
 pub async fn disable() -> anyhow::Result<()> {
-    println!("Emergency mode DISABLED");
-    println!("Normal filtering resumed.");
-    Ok(())
+    anyhow::bail!("emergency mode is not implemented; change the edge policy and restart Rampart")
 }

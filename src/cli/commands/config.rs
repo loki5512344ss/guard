@@ -1,14 +1,9 @@
 pub async fn run(key: Option<String>, value: Option<String>) -> anyhow::Result<()> {
     match (key, value) {
-        (Some(k), Some(v)) => {
-            println!("Setting {k} = {v}");
-            Ok(())
+        (Some(_), Some(_)) => {
+            anyhow::bail!("config updates are not implemented; edit the edge config and restart Rampart")
         },
-        (Some(k), None) => {
-            println!("Reading config key: {k}");
-            println!("(not implemented in v0.1)");
-            Ok(())
-        },
+        (Some(_), None) => anyhow::bail!("config lookup is not implemented"),
         (None, Some(_)) | (None, None) => {
             println!("Configuration");
             println!("=============\n");
