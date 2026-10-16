@@ -2,7 +2,7 @@ use crate::store::StateStore;
 use redis::AsyncCommands;
 
 mod sync;
-pub use sync::start_blacklist_sync;
+pub use sync::{start_blacklist_sync, start_local_ban_publisher};
 
 pub struct RedisStore {
     client: redis::Client,

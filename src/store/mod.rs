@@ -1,7 +1,7 @@
 #[cfg(feature = "store-redis")]
 pub mod redis;
 #[cfg(feature = "store-redis")]
-pub use redis::start_blacklist_sync;
+pub use redis::{start_blacklist_sync, start_local_ban_publisher};
 
 pub mod clickhouse;
 

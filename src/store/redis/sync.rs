@@ -1,5 +1,8 @@
 mod event;
+mod publisher;
 mod snapshot;
+
+pub use publisher::start_local_ban_publisher;
 
 use crate::filter::blacklist::Blacklist;
 use futures::StreamExt;
