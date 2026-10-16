@@ -68,6 +68,31 @@ filtering in front of the VDS, hide the home's public address, and carry
 accepted traffic to the home server through a restricted tunnel. Two ordinary
 VDS instances without upstream filtering do not provide that protection.
 
+## Network layout and firewall
+
+Use the VDS edge as the only public Minecraft endpoint. The provider should
+send filtered TCP `25565` traffic to that edge; the edge then reaches Paper over
+a private link (for example, WireGuard). Use addresses from your own VPN and
+replace the example roles below with the actual interfaces and addresses.
+
+| Service | Allowed source | Publicly reachable? |
+| --- | --- | --- |
+| VDS edge TCP `25565` | DDoS provider ranges, or the Internet only if the provider requires it | Yes, through the provider |
+| Paper TCP `25566` | Edge VPN address only | No |
+| Redis TCP `6379` | Manager and edge VPN addresses only | No |
+| Manager API TCP `8080` | Admin VPN or explicitly allowed admin IPs | No |
+| Prometheus TCP `9090` | Monitoring VPN / localhost | No |
+
+Do not forward Paper, Redis, or management ports from the home router to the
+Internet. On Proxmox, allow the Paper port only on the tunnel/private interface
+and restrict it to the edge addresses. If Manager and Redis run on a VDS, bind
+or firewall Redis to the private interface and let each edge reach it through
+the VPN. Use the same protected Redis endpoint in Manager and every edge
+configuration; do not publish Redis with a Docker `ports` mapping. Protect the
+Manager API and monitoring UI with the admin VPN or firewall as well. A private
+tunnel limits who can reach these services; it does not add DDoS scrubbing to
+the public edge.
+
 For a DDoS provider that sends PROXY protocol v2, enable inbound parsing only
 for that provider's TCP source ranges:
 
