@@ -127,7 +127,7 @@ Edge подписывается на Pub/Sub перед загрузкой сн�
 
 Честно, на текущий момент в API **нет**:
 
-- drain нод через API (есть только CLI `rampart-cli drain`);
+- drain нод через API или CLI;
 - webhooks, metrics summary, challenge management;
 - регистрации нод через `POST /api/v1/nodes`;
 - rate limiting на сами запросы API (кроме login).
