@@ -13,7 +13,7 @@
 curl -s http://EDGE_IP:9090/metrics | grep -E "rampart_(connections|rate_limit|attack_status)"
 
 # rampart_attack_status: 0 = normal, 1 = suspicious, 2 = under_attack
-# (детектор по порогу pps, см. src/traffic/detector.rs)
+# (детектор по порогу pps, см. src/traffic/intel/detector.rs)
 
 # ── ШАГ 2: Определить тип атаки ──
 
@@ -78,8 +78,9 @@ cargo test --test config_parse
 RAMPART_CONFIG=/etc/rampart/config.toml /usr/local/bin/rampart
 
 # C) Нет ни одного protocol handler
-# rampart требует зарегистрированный ProtocolHandler (feature protocol-http
-# или внешний крейт). Пока плагинов нет — edge в исследовательском режиме.
+# Для Minecraft Java пересобери edge с --features protocol-minecraft и проверь
+# секцию [protocol.minecraft]. Для HTTP используй --features protocol-http.
+# Если активной protocol feature нет, edge завершится с ошибкой при запуске.
 
 # D) XDP не загрузился
 journalctl -u rampart | grep -i xdp

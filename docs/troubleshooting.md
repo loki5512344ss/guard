@@ -44,9 +44,11 @@ perf top -p $(pgrep rampart)
 
 ### "Edge не стартует: no protocol plugins compiled"
 
-Реестр протоколов пуст: `rampart` требует хотя бы один ProtocolHandler
-(feature `protocol-http` или внешний крейт-плагин). Пока плагинов нет,
-edge запускается только в исследовательских целях. См. src/bin/rampart.rs.
+Реестр протоколов пуст: `rampart` требует хотя бы один ProtocolHandler.
+Для Minecraft Java собери edge с `--features protocol-minecraft` и включи
+`[protocol.minecraft]` в конфиге; для HTTP используй `--features protocol-http`.
+Без зарегистрированного обработчика edge завершится с ошибкой при запуске.
+Подробная инструкция: [Minecraft Java](minecraft-java.md).
 
 ---
 
