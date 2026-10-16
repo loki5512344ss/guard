@@ -79,6 +79,15 @@ cargo run --release --bin rampart-manager
 # API на 0.0.0.0:8080
 ```
 
+Manager listens on all interfaces by default. Permit `8080` only from an admin
+VPN or specific admin addresses; do not expose the API to the public Internet.
+The same applies to Redis (`6379`) and monitoring endpoints such as Prometheus
+(`9090`), ClickHouse (`8123`/`9000`) and Grafana (`3000`). The sample Compose
+file publishes ClickHouse and Grafana ports on the host, so restrict them with
+the host firewall or change their port bindings before deploying on a public
+VDS. Redis has no published host port in that Compose file and is reachable
+only by containers on its Docker network unless you deliberately expose it.
+
 Инфраструктура (Redis, ClickHouse, Grafana):
 
 ```bash
