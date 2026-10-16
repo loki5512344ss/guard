@@ -6,13 +6,22 @@
 ## 1. Edge (`config.toml`, путь задаётся `RAMPART_CONFIG`)
 
 ```toml
+# Корневые поля должны стоять до первой TOML-секции.
+whitelist = ["127.0.0.1", "::1"]
+
 [bind]
 address = "0.0.0.0"
 port = 25565
 
 [backend]
-# Список TCP-бэкендов (addr:port). Обязателен непустой, адреса валидируются.
+# Список TCP-бэкендов (addr:port). Для Minecraft нужен ровно один backend.
 upstreams = ["127.0.0.1:25566"]
+
+[protocol.minecraft]
+enabled = true
+max_frame_bytes = 8192
+timeout_secs = 5
+send_proxy_protocol = false
 
 [workers]
 count = 4
@@ -47,10 +56,24 @@ port = 9090
 enabled = false                 # PoW challenge, OFF по умолчанию
 difficulty = 4
 
-whitelist = ["127.0.0.1", "::1"]   # только IP-адреса, валидируются при парсинге
+# Входящий PROXY v2 от известного TCP DDoS-прокси; включай только если
+# прокси действительно отправляет этот заголовок.
+[proxy_protocol]
+ingress_enabled = false
+trusted_cidrs = []
+ingress_timeout_ms = 750
+max_header_bytes = 512
+
 ```
 
+Этот пример выбирает Minecraft Java и требует сборки с `protocol-minecraft`.
+Для HTTP используй сборку `protocol-http` и удали `[protocol.minecraft]`.
+
 Все секции опциональны — при отсутствии используются дефолты из таблицы выше.
+Для ingress PROXY v2 укажи сети именно прокси в `trusted_cidrs`; включение без
+доверенной сети отклоняется при чтении конфига.
+`send_proxy_protocol` отправляет заголовок на Paper backend; прежнее имя
+`proxy_protocol` внутри `[protocol.minecraft]` остаётся допустимым alias.
 
 ## 2. Manager (переменные окружения)
 
@@ -73,7 +96,8 @@ Manager всегда слушает `0.0.0.0:8080`.
 | `geoip` | ❌ | GeoIP lookup (maxminddb) |
 | `xdp` | ❌ | Загрузка XDP-программы через libbpf-rs |
 | `io-uring` | ❌ | splice/io_uring I/O |
-| `protocol-http` | ❌ | Резерв под HTTP-плагин (пока пустой) |
+| `protocol-http` | ❌ | HTTP/1.1 handler; включай только для HTTP upstream |
+| `protocol-minecraft` | ❌ | Minecraft Java TCP handshake и проксирование |
 
 Пример: `cargo build --release --features xdp --bin rampart`.
 
@@ -87,4 +111,4 @@ clang -O2 -g -target bpf -c xdp/core/universal_filter.c -o /tmp/universal_filter
 
 ---
 
-*Версия: 2.0 | Август 2026*
+*Версия: 2.1 | Октябрь 2026*

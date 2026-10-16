@@ -13,7 +13,7 @@ RUN if command -v clang >/dev/null; then \
       clang -O2 -g -target bpf -c xdp/core/universal_filter.c -o /app/target/xdp/universal_filter.o; \
     fi
 
-RUN cargo build --release --features xdp --bin rampart && \
+RUN cargo build --release --features xdp,protocol-minecraft --bin rampart && \
     cp target/release/rampart /app/rampart && \
     strip /app/rampart
 

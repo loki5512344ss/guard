@@ -40,6 +40,7 @@ io-uring = ["dep:tokio-splice"]
 # HTTP/1.1 protocol handler: парсинг request-head, verdict Allow/Reject,
 # туннелирование на upstream (см. src/protocol/http/ и [protocol.http] в конфиге).
 protocol-http = []
+protocol-minecraft = []
 
 [dependencies]
 tokio = { version = "1", features = ["full"] }
@@ -51,14 +52,14 @@ thiserror = "2"
 anyhow = "1"
 dashmap = "6"
 hex = "0.4"
-sha2 = "0.10"
+sha2 = "0.11"
 subtle = "2"
-socket2 = { version = "0.5", features = ["all"] }
+socket2 = { version = "0.6", features = ["all"] }
 futures = "0.3"
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+reqwest = { version = "0.13", default-features = false, features = ["json", "query", "rustls"] }
 prometheus = { version = "0.14", features = ["process"] }
-toml = "0.8"
-rand = { version = "0.8", default-features = false, features = ["std", "std_rng"] }
+toml = "1.1"
+rand = { version = "0.10", default-features = false, features = ["std", "std_rng", "thread_rng"] }
 clap = { version = "4", features = ["derive"] }
 chrono = { version = "0.4", features = ["serde"] }
 
@@ -67,11 +68,11 @@ ratatui = "0.30"
 crossterm = "0.29"
 
 axum = "0.8"
-tower-http = { version = "0.6", features = ["cors"] }
-jsonwebtoken = "9"
+tower-http = { version = "0.7", features = ["cors"] }
+jsonwebtoken = "11"
 
-redis = { version = "0.27", optional = true, features = ["tokio-comp", "connection-manager"] }
-maxminddb = { version = "0.30", optional = true }
+redis = { version = "1.7", optional = true, features = ["tokio-comp", "connection-manager"] }
+maxminddb = { version = "0.32", optional = true }
 tokio-splice = { version = "0.2", optional = true }
-libbpf-rs = { version = "0.24", optional = true }
+libbpf-rs = { version = "0.27", optional = true }
 libc = { version = "0.2", optional = true }

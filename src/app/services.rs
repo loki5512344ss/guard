@@ -19,6 +19,15 @@ use tokio::sync::watch;
 /// HTTP/1.1-обработчик с политикой из секции `[protocol.http]`.
 /// Внешние крейты регистрируют свои обработчики в этом же месте.
 pub(crate) fn build_registry(config: &Config) -> ProtocolRegistry {
+    #[cfg(feature = "protocol-minecraft")]
+    if config.protocol.minecraft.enabled {
+        let mut registry = ProtocolRegistry::new();
+        registry.register(Box::new(crate::protocol::minecraft::MinecraftProtocolHandler::new(
+            &config.protocol.minecraft,
+            &config.backend.upstreams,
+        )));
+        return registry;
+    }
     #[cfg(feature = "protocol-http")]
     {
         let mut registry = ProtocolRegistry::new();
@@ -60,10 +69,17 @@ pub(crate) fn start_xdp(
         let mut guard = shared.lock().expect("xdp lock poisoned");
         let globals = XdpGlobals::from_config(&config.xdp)?;
         guard.set_globals(globals);
-        // Порядок load-bearing: `load()` захватывает blacklist и политику
-        // авто-бана в ringbuf-колбэк (XdpFilter::load -> build_ringbuf),
-        // поэтому set_autoban обязан отработать ДО load(), а не после.
-        guard.set_autoban(blacklist.clone(), &config.xdp);
+        // With ingress PROXY protocol, XDP sees only the provider's transport
+        // address, so its events must not trigger per-player or provider bans.
+        if !config.proxy_protocol.ingress_enabled {
+            // load() captures the blacklist and auto-ban policy in its ringbuf
+            // callback, so set_autoban must happen first.
+            guard.set_autoban(blacklist.clone(), &config.xdp);
+        } else if config.xdp.auto_ban_enabled {
+            tracing::warn!(
+                "XDP auto-ban is disabled while inbound PROXY protocol is enabled; XDP only sees transport peers"
+            );
+        }
         guard.load()?;
     }
     let xdp_metrics = XdpMetrics::register()?;

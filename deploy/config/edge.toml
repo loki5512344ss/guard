@@ -1,12 +1,22 @@
-# Rampart edge — единый конфиг (схема: src/config/sections.rs)
+# Rampart edge для Minecraft Java (схема: src/config/sections/)
+# whitelist — корневое поле, поэтому оно задаётся до любых TOML-секций.
+whitelist = ["127.0.0.1", "::1"]
 
 [bind]
 address = "0.0.0.0"
 port = 25565
 
 [backend]
-# Generic TCP-бэкенды за edge-нодой (addr:port)
+# Адрес Paper за доверенным прокси; закрой этот порт firewall-ом от интернета.
 upstreams = ["127.0.0.1:25566"]
+
+[protocol.minecraft]
+enabled = true
+max_frame_bytes = 8192
+timeout_secs = 5
+# Outbound: включай вместе с proxies.proxy-protocol: true на Paper и firewall,
+# разрешающим backend-порт только от этого Rampart.
+send_proxy_protocol = false
 
 [workers]
 count = 4
@@ -41,4 +51,10 @@ port = 9090
 enabled = false
 difficulty = 4
 
-whitelist = ["127.0.0.1", "::1"]
+# Inbound: включай только если входящий TCP-прокси передаёт PROXY v2.
+# Укажи точные адреса/CIDR этого прокси; не добавляй сюда адреса игроков.
+[proxy_protocol]
+ingress_enabled = false
+trusted_cidrs = []
+ingress_timeout_ms = 750
+max_header_bytes = 512

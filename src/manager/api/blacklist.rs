@@ -1,10 +1,4 @@
-#[cfg(feature = "store-redis")]
-use crate::manager::AppState;
-#[cfg(feature = "store-redis")]
-use axum::{Json, extract::State};
 use serde::{Deserialize, Serialize};
-#[cfg(feature = "store-redis")]
-use std::sync::Arc;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct BlacklistEntry {
@@ -32,68 +26,19 @@ pub struct AddBlacklistRequest {
     pub duration_secs: Option<u64>,
 }
 
-#[cfg(feature = "store-redis")]
-pub async fn list_blacklist(State(state): State<Arc<AppState>>) -> Json<BlacklistResponse> {
-    let mut conn = match state.redis_client.get_multiplexed_async_connection().await {
-        Ok(c) => c,
-        Err(_) => {
-            return Json(BlacklistResponse {
-                items: vec![],
-                total: 0,
-            });
-        },
-    };
-
-    let members: Vec<String> = match redis::cmd("SMEMBERS")
-        .arg("rampart:blacklist")
-        .query_async(&mut conn)
-        .await
-    {
-        Ok(m) => m,
-        Err(_) => {
-            return Json(BlacklistResponse {
-                items: vec![],
-                total: 0,
-            });
-        },
-    };
-
-    let items: Vec<BlacklistEntry> = members
-        .into_iter()
-        .map(|target| BlacklistEntry {
-            target,
-            entry_type: "ip".to_string(),
-            reason: "manual".to_string(),
-            created_at: chrono::Utc::now().to_rfc3339(),
-            expires_at: None,
-        })
-        .collect();
-
-    let total = items.len();
-    Json(BlacklistResponse { items, total })
+#[derive(Deserialize)]
+pub struct RemoveBlacklistRequest {
+    pub target: String,
 }
 
 #[cfg(feature = "store-redis")]
-pub async fn add_blacklist(
-    State(state): State<Arc<AppState>>,
-    Json(req): Json<AddBlacklistRequest>,
-) -> Json<serde_json::Value> {
-    let mut conn = match state.redis_client.get_multiplexed_async_connection().await {
-        Ok(c) => c,
-        Err(_) => return Json(serde_json::json!({"error": "redis unavailable"})),
-    };
+mod common;
+#[cfg(feature = "store-redis")]
+mod list;
+#[cfg(feature = "store-redis")]
+mod mutate;
 
-    let _: () = redis::cmd("SADD")
-        .arg("rampart:blacklist")
-        .arg(&req.target)
-        .query_async(&mut conn)
-        .await
-        .unwrap_or_default();
-    tracing::info!("Added to blacklist: {} ({})", req.target, req.reason);
-
-    Json(serde_json::json!({
-        "status": "added",
-        "target": req.target,
-        "reason": req.reason
-    }))
-}
+#[cfg(feature = "store-redis")]
+pub use list::list_blacklist;
+#[cfg(feature = "store-redis")]
+pub use mutate::{add_blacklist, remove_blacklist};

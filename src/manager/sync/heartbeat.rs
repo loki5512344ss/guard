@@ -59,7 +59,7 @@ async fn collect_node_keys(conn: &mut redis::aio::MultiplexedConnection) -> anyh
     let mut iter = conn.scan_options::<String>(opts).await?;
     let mut keys = Vec::new();
     while let Some(key) = iter.next().await {
-        keys.push(key);
+        keys.push(key?);
     }
     Ok(keys)
 }

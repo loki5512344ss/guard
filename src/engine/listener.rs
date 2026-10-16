@@ -77,10 +77,13 @@ async fn accept_loop(
                 tokio::spawn(async move {
                     // Hot path Traffic Intelligence: только атомики и DashMap.
                     hook.on_accept();
-                    if let Err(e) = gateway.handle(stream, peer_addr).await {
+                    let outcome = gateway.handle(stream, peer_addr).await;
+                    if let Err(e) = outcome.result {
                         tracing::debug!("connection from {peer_addr}: {e}");
                     }
-                    hook.on_connection_end(peer_addr.ip());
+                    if let Some(client_ip) = outcome.client_ip {
+                        hook.on_connection_end(client_ip);
+                    }
                 });
             }
         }

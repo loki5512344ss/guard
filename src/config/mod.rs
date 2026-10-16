@@ -1,12 +1,17 @@
 //! Единый конфиг платформы Rampart.
 mod sections;
 
+#[cfg(feature = "protocol-http")]
+pub use sections::HttpProtocolConfig;
+#[cfg(feature = "protocol-minecraft")]
+pub use sections::MinecraftProtocolConfig;
+#[cfg(any(feature = "protocol-http", feature = "protocol-minecraft"))]
+pub use sections::ProtocolConfig;
 pub use sections::{
     BackendConfig, BanConfig, BindConfig, DetectAlertConfig, DetectAutobanConfig, DetectConfig, DetectPrefixConfig,
-    LimitsConfig, LoggingConfig, MetricsConfig, PowConfig, StoreConfig, WorkerConfig, XdpConfig,
+    LimitsConfig, LoggingConfig, MetricsConfig, PowConfig, ProxyProtocolConfig, StoreConfig, TrustedProxyCidr,
+    WorkerConfig, XdpConfig,
 };
-#[cfg(feature = "protocol-http")]
-pub use sections::{HttpProtocolConfig, ProtocolConfig};
 
 use serde::Deserialize;
 use std::fs;
@@ -22,6 +27,8 @@ pub struct Config {
     #[serde(default)]
     pub limits: LimitsConfig,
     #[serde(default)]
+    pub proxy_protocol: ProxyProtocolConfig,
+    #[serde(default)]
     pub ban: BanConfig,
     #[serde(default)]
     pub store: StoreConfig,
@@ -35,7 +42,7 @@ pub struct Config {
     pub pow: PowConfig,
     #[serde(default)]
     pub detect: DetectConfig,
-    #[cfg(feature = "protocol-http")]
+    #[cfg(any(feature = "protocol-http", feature = "protocol-minecraft"))]
     #[serde(default)]
     pub protocol: ProtocolConfig,
     #[serde(default)]
@@ -80,6 +87,26 @@ impl Config {
         if self.detect.prefix.enabled && self.detect.prefix.syn_threshold == 0 {
             anyhow::bail!("detect.prefix.syn_threshold must be positive when enabled");
         }
+        if self.limits.max_connections_per_ip == 0 {
+            anyhow::bail!("limits.max_connections_per_ip must be positive");
+        }
+        if self.proxy_protocol.ingress_enabled {
+            if self.proxy_protocol.trusted_cidrs.is_empty() {
+                anyhow::bail!("proxy_protocol.ingress_enabled requires at least one trusted_cidrs entry");
+            }
+            if self.proxy_protocol.ingress_timeout_ms == 0 || self.proxy_protocol.ingress_timeout_ms > 5_000 {
+                anyhow::bail!("proxy_protocol.ingress_timeout_ms must be between 1 and 5000");
+            }
+            if self.proxy_protocol.max_header_bytes < 52 || self.proxy_protocol.max_header_bytes > 4096 {
+                anyhow::bail!("proxy_protocol.max_header_bytes must be between 52 and 4096");
+            }
+            #[cfg(feature = "protocol-minecraft")]
+            if !self.protocol.minecraft.enabled {
+                anyhow::bail!("proxy_protocol.ingress_enabled requires protocol.minecraft.enabled");
+            }
+            #[cfg(not(feature = "protocol-minecraft"))]
+            anyhow::bail!("proxy_protocol.ingress_enabled requires the protocol-minecraft feature");
+        }
         #[cfg(feature = "protocol-http")]
         {
             if self.protocol.http.max_header_bytes == 0 {
@@ -87,6 +114,21 @@ impl Config {
             }
             if self.protocol.http.timeout_secs == 0 {
                 anyhow::bail!("protocol.http.timeout_secs must be positive");
+            }
+        }
+        #[cfg(feature = "protocol-minecraft")]
+        if self.protocol.minecraft.enabled {
+            if self.pow.enabled {
+                anyhow::bail!("pow.enabled is incompatible with protocol.minecraft");
+            }
+            if self.backend.upstreams.len() != 1 {
+                anyhow::bail!("protocol.minecraft requires exactly one backend.upstreams entry");
+            }
+            if self.protocol.minecraft.max_frame_bytes == 0 {
+                anyhow::bail!("protocol.minecraft.max_frame_bytes must be positive");
+            }
+            if self.protocol.minecraft.timeout_secs == 0 {
+                anyhow::bail!("protocol.minecraft.timeout_secs must be positive");
             }
         }
         Ok(())

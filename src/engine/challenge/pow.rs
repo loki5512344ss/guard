@@ -1,4 +1,4 @@
-use rand::RngCore;
+use rand::Rng;
 use sha2::{Digest, Sha256};
 use std::net::IpAddr;
 use std::time::{Duration, Instant};
@@ -22,7 +22,7 @@ impl Challenge {
     #[must_use]
     pub fn generate(difficulty: u8) -> Self {
         let mut token = [0u8; 32];
-        rand::thread_rng().fill_bytes(&mut token);
+        rand::rng().fill_bytes(&mut token);
         Self {
             token,
             created_at: Instant::now(),

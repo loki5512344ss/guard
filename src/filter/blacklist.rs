@@ -10,6 +10,7 @@ struct BanEntry {
 
 pub struct Blacklist {
     entries: Arc<DashMap<IpAddr, BanEntry>>,
+    redis_entries: Arc<DashMap<IpAddr, BanEntry>>,
 }
 
 impl Default for Blacklist {
@@ -22,18 +23,12 @@ impl Blacklist {
     pub fn new() -> Self {
         Self {
             entries: Arc::new(DashMap::new()),
+            redis_entries: Arc::new(DashMap::new()),
         }
     }
 
     pub fn is_blocked(&self, ip: IpAddr) -> bool {
-        if let Some(entry) = self.entries.get(&ip) {
-            if entry.expires > Instant::now() {
-                return true;
-            }
-            drop(entry);
-            self.entries.remove(&ip);
-        }
-        false
+        Self::is_blocked_in(&self.entries, ip) || Self::is_blocked_in(&self.redis_entries, ip)
     }
 
     pub fn add(&self, ip: IpAddr, duration: Duration, reason: &str) {
@@ -50,16 +45,53 @@ impl Blacklist {
         self.entries.remove(&ip);
     }
 
+    pub fn add_redis(&self, ip: IpAddr, duration: Duration, reason: &str) {
+        self.redis_entries.insert(
+            ip,
+            BanEntry {
+                expires: Instant::now() + duration,
+                _reason: reason.to_string(),
+            },
+        );
+    }
+
+    pub fn remove_redis(&self, ip: IpAddr) {
+        self.redis_entries.remove(&ip);
+    }
+
+    /// Replace Redis-managed bans while preserving local detector bans.
+    pub fn replace_redis<I>(&self, entries: I)
+    where
+        I: IntoIterator<Item = (IpAddr, Duration, String)>,
+    {
+        self.redis_entries.clear();
+        for (ip, duration, reason) in entries {
+            self.add_redis(ip, duration, &reason);
+        }
+    }
+
     pub fn len(&self) -> usize {
-        self.entries.len()
+        self.entries.len() + self.redis_entries.len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
+        self.entries.is_empty() && self.redis_entries.is_empty()
     }
 
     pub fn clear_expired(&self) {
         self.entries.retain(|_, entry| entry.expires > Instant::now());
+        self.redis_entries.retain(|_, entry| entry.expires > Instant::now());
+    }
+
+    fn is_blocked_in(entries: &DashMap<IpAddr, BanEntry>, ip: IpAddr) -> bool {
+        if let Some(entry) = entries.get(&ip) {
+            if entry.expires > Instant::now() {
+                return true;
+            }
+            drop(entry);
+            entries.remove(&ip);
+        }
+        false
     }
 }
 

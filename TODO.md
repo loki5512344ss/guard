@@ -98,6 +98,8 @@ guard/
 ### Движок без протоколов — сделать полезным — ✅ готово
 - [x] **Первый протокол-плагин**: `protocol-http` — HTTP/1.1 request-head анализ
       (src/protocol/http/, tests/http_protocol.rs).
+- [x] **Minecraft Java TCP MVP**: ограниченный handshake status/login, передача исходных
+      байтов backend и опциональный PROXY protocol v2 (`protocol-minecraft`).
 - [x] **TCP-proxy режим**: tunnel.rs + ProtocolHandler интегрированы в listener/app wiring.
 - [x] **Fail-fast сообщение** при пустом registry (`ProtocolRegistry::primary()`).
 
@@ -149,6 +151,10 @@ guard/
   bin-файлы тонкие (rampart.rs: 330 → 6 строк).
 
 ### Новые найденные проблемы (чинить в v0.4)
+- [ ] Redis blacklist: сохранять срок/причину бана и восстанавливать edge-состояние после reconnect;
+      Pub/Sub сейчас только для подключённых узлов.
+- [ ] Minecraft Java: Velocity modern forwarding, игровые netns smoke-тесты и нагрузочная проверка.
+- [ ] Принимать client IP от внешнего DDoS-прокси через доверенный inbound PROXY protocol.
 - [x] `cargo check --no-default-features` починен (2026-09-15, раунд 2): redis-код в
       manager/sync/api/store/app закрыт `#[cfg(feature = "store-redis")]`, менеджер без фичи fail-fast'ит на старте;
       CI теперь гоняет `cargo check --no-default-features --all-targets` гейтом.

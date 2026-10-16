@@ -27,9 +27,9 @@
 ## 3. Быстрый старт — Edge
 
 ```bash
-# Сборка
+# Сборка edge для Minecraft Java
 git clone https://github.com/loki5512344/rampart.git && cd rampart
-cargo build --release --bin rampart
+cargo build --release --features protocol-minecraft --bin rampart
 
 # Установка
 sudo cp target/release/rampart /usr/local/bin/
@@ -64,10 +64,10 @@ systemctl enable --now rampart
 journalctl -u rampart -f
 ```
 
-> ⚠️ В ядре нет ни одной реализации протокольного обработчика: реестр протоколов
-> пуст, и `rampart` при старте требует feature `protocol-http` или внешний
-> ProtocolHandler (см. src/bin/rampart.rs). До появления плагинов edge-нода
-> запускается только в исследовательских целях.
+Minecraft-конфиг рассчитан на один Paper backend. Если включён
+`protocol.minecraft.send_proxy_protocol`, включи `proxies.proxy-protocol: true` в
+Paper и закрой backend-порт firewall-ом от всех, кроме Rampart. Для подробной
+схемы с домашним сервером и защищённым VDS см. [Minecraft Java guide](minecraft-java.md).
 
 ## 4. Быстрый старт — Manager
 
@@ -107,4 +107,4 @@ docker compose -f deploy/docker-compose.yml up -d
 
 ---
 
-*Версия: 2.0 | Август 2026*
+*Версия: 2.1 | Октябрь 2026*
