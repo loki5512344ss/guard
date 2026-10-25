@@ -61,7 +61,7 @@ stub-бэкендом (socat echo) + attacker-контейнер со 100 source
 замеряющие RTT.
 
 ```bash
-git clone https://github.com/loki5512344/rampart.git && cd rampart
+git clone https://github.com/loki5512344ss/guard.git && cd guard
 cargo build --release --bin rampart
 cd deploy/test/stress && bash run-stress.sh
 ```

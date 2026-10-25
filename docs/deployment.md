@@ -28,7 +28,7 @@
 
 ```bash
 # Сборка edge для Minecraft Java
-git clone https://github.com/loki5512344/rampart.git && cd rampart
+git clone https://github.com/loki5512344ss/guard.git && cd guard
 cargo build --release --features protocol-minecraft --bin rampart
 
 # Установка
