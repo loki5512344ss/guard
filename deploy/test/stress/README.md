@@ -25,7 +25,7 @@
 
 ```bash
 # 1. На VDS: клонировать репозиторий, собрать бинарь
-git clone https://github.com/loki5512344/rampart.git && cd rampart
+git clone https://github.com/loki5512344ss/guard.git && cd guard
 cargo build --release --bin rampart
 
 # 2. Запустить весь цикл (setup + 4 фазы)
