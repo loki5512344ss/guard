@@ -1,6 +1,6 @@
 FROM rust:slim-bookworm AS builder
 
-RUN apt-get update && apt-get install -y pkg-config libssl-dev clang libelf-dev libbpf-dev linux-libc-dev make && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y pkg-config libssl-dev clang libelf-dev libbpf-dev linux-libc-dev make gcc && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 COPY Cargo.toml Cargo.lock rustfmt.toml clippy.toml deny.toml build.rs ./
@@ -10,7 +10,7 @@ COPY xdp/ ./xdp/
 # Smoke-check: BPF-программа компилируется clang'ом (не грузится, только сборка)
 RUN if command -v clang >/dev/null; then \
       mkdir -p /app/target/xdp && \
-      clang -O2 -g -target bpf -c xdp/core/universal_filter.c -o /app/target/xdp/universal_filter.o; \
+      clang -O2 -g -target bpf -I"/usr/include/$(gcc -print-multiarch)" -c xdp/core/universal_filter.c -o /app/target/xdp/universal_filter.o; \
     fi
 
 RUN cargo build --release --features xdp,protocol-minecraft --bin rampart && \
