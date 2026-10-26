@@ -44,8 +44,9 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      # libbpf-sys собирает vendored libbpf и требует заголовки libelf/zlib
-      - run: sudo apt-get update && sudo apt-get install -y libelf-dev zlib1g-dev
+      # libbpf-sys собирает vendored libbpf (нужны libelf/zlib), а build.rs
+      # компилирует XDP-программу через clang (нужны libbpf-dev/linux-libc-dev)
+      - run: sudo apt-get update && sudo apt-get install -y libelf-dev zlib1g-dev libbpf-dev clang linux-libc-dev
       - run: cargo test --all-features
 
   repo-gates:
