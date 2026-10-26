@@ -69,7 +69,7 @@ crossterm = "0.29"
 
 axum = "0.8"
 tower-http = { version = "0.7", features = ["cors"] }
-jsonwebtoken = "11"
+jsonwebtoken = { version = "11", features = ["rust_crypto"] }
 
 redis = { version = "1.7", optional = true, features = ["tokio-comp", "connection-manager"] }
 maxminddb = { version = "0.32", optional = true }
