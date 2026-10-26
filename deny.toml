@@ -21,6 +21,7 @@ allow = [
     "ISC",
     "Unicode-3.0",
     "Zlib",
+    "BSL-1.0",
     "Unlicense",
     "CC0-1.0",
     "CDLA-Permissive-2.0",
@@ -43,12 +44,18 @@ deny = [
     { name = "openssl-sys", version = "*" },
     { name = "openssl", version = "*" },
 ]
+# Дубли версий допустимы, когда их тянут несовместимые деревья зависимостей
+# (redis/jsonwebtoken vs reqwest/axum). Каждая запись — конкретная пара версий.
 skip = [
+    { name = "base64", version = "0.22" },
     { name = "hashbrown", version = "0.14" },
-    { name = "socket2", version = "0.5" },
+    { name = "linux-raw-sys", version = "0.4" },
+    { name = "num-bigint", version = "0.4" },
+    { name = "rustix", version = "0.38" },
     { name = "syn", version = "2" },
     { name = "thiserror", version = "1" },
     { name = "thiserror-impl", version = "1" },
+    { name = "tower-http", version = "0.6" },
 ]
 skip-tree = []
 
