@@ -43,6 +43,18 @@ clickhouse_url = ""             # пусто = запись событий вы�
 [xdp]
 enabled = false                 # требует сборки --features xdp, kernel 5.10+
 interface = "eth0"
+protected_port_start = 1        # пакеты вне диапазона уходят в XDP_PASS до фильтра
+protected_port_end = 65535
+udp_policy = "pass"             # pass | drop | rate-limit (для IPv4 и IPv6)
+udp_rate_hit_count = 100        # порог пакетов в окне при rate-limit
+udp_rate_window_ms = 1000       # окно rate-limit
+throttle_enabled = true         # SYN-throttle (только IPv4)
+events_enabled = true           # ringbuf-события в userspace (только IPv4)
+auto_ban_enabled = false        # OPT-IN: баны по событиям ringbuf
+auto_ban_duration_secs = 300
+auto_ban_conn_drop_fails = 3
+syn_challenge_enabled = false   # RST-challenge (только IPv4)
+challenge_timeout_ms = 3000
 
 [logging]
 level = "info"                  # trace, debug, info, warn, error
@@ -108,6 +120,33 @@ Manager всегда слушает `0.0.0.0:8080`.
 ```bash
 clang -O2 -g -target bpf -c xdp/core/universal_filter.c -o /tmp/universal_filter.o
 ```
+
+Параметры `[xdp]` (значения по умолчанию — в `src/config/sections/platform.rs`):
+
+| Поле | По умолчанию | Что делает |
+|------|--------------|------------|
+| `enabled` | `false` | Загрузить и приаттачить XDP-программу при старте |
+| `interface` | `eth0` | Интерфейс; native XDP, при отказе драйвера — generic (skb) |
+| `protected_port_start` / `_end` | `1` / `65535` | Порт-гейт: трафик вне диапазона не фильтруется |
+| `udp_policy` | `pass` | `drop` — дропать весь UDP; `rate-limit` — окно на source-IP |
+| `udp_rate_hit_count` / `udp_rate_window_ms` | `100` / `1000` | Порог и окно для `rate-limit` |
+| `throttle_enabled` | `true` | SYN-throttle + авто-бан по `connection_throttle` |
+| `events_enabled` | `true` | Ringbuf-события (rate-limit/conn-drop) в userspace |
+| `auto_ban_enabled` | `false` | OPT-IN: баны по событиям ringbuf |
+| `auto_ban_duration_secs` | `300` | Длительность авто-бана |
+| `auto_ban_conn_drop_fails` | `3` | Порог `conn->fails` для бана по `EVENT_CONN_DROP` |
+| `syn_challenge_enabled` | `false` | RST-challenge (Oubliette liveness proof) |
+| `challenge_secret_hex` | плейсхолдер | 128-битный hex-секрет challenge |
+| `challenge_timeout_ms` | `3000` | TTL pending-challenge |
+
+Покрытие семейств адресов:
+
+- **IPv4**: blacklist, SYN-throttle, conntrack, RST-challenge, ringbuf-события, `udp_policy`
+  (включая `rate-limit`), prefix-статистика.
+- **IPv6**: blacklist (`blacklist6_map`, LPM по `/128` и префиксам), `udp_policy`
+  (включая `rate-limit` с 128-битным ключом), детект TCP-bypass, prefix-статистика.
+  Пока нет: conntrack, SYN-throttle, RST-challenge, ringbuf-события и unban для v6 —
+  для v6 события видны только в счётчиках `stats_map`.
 
 ---
 

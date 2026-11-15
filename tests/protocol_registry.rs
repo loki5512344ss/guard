@@ -1,3 +1,6 @@
+//! Protocol registry tests: empty registries fail fast, registered handlers
+//! resolve by name.
+
 use std::future::Future;
 use std::pin::Pin;
 

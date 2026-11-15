@@ -1,7 +1,7 @@
-//! Периодический subnet-монитор: источник снапшотов → детектор → эскалация.
+//! Periodic subnet monitor: snapshot source, detector and verdict escalation.
 //!
-//! Источник выбирается по сборке и конфигу: XDP-карта `prefix_stats`
-//! (feature `xdp` + загруженный фильтр) либо юзерспейс-агрегатор
+//! The source is chosen by build features and config: the XDP `prefix_stats` map
+//! (feature `xdp` with a loaded filter) or the userspace aggregator
 //! [`SubnetTracker`].
 
 use crate::config::DetectPrefixConfig;
@@ -32,10 +32,11 @@ impl Source {
 	}
 }
 
-/// Запускает фоновый subnet-монитор, если `[detect.prefix] enabled`.
+/// Spawns the background subnet monitor when `[detect.prefix] enabled`.
 ///
-/// Приоритет источника: XDP-карта при загруженном фильтре, иначе
-/// юзерспейс-агрегатор. Без обоих источников монитор не запускается.
+/// Source priority: the XDP map when a filter is loaded, otherwise the userspace
+/// aggregator. Without either source the monitor stays disabled and logs a
+/// warning.
 pub fn spawn(
 	detect: &DetectPrefixConfig,
 	tracker: Option<Arc<SubnetTracker>>,
@@ -123,7 +124,7 @@ async fn enforce_block(source: &Source, pv: &PrefixVerdict) {
 	}
 }
 
-/// Длина префикса, соответствующая гранулярности детекции (v4 /24, v6 /64).
+/// Prefix length matching the detection granularity (v4 /24, v6 /64).
 #[cfg(feature = "xdp")]
 fn prefix_len(prefix: IpAddr) -> u8 {
 	match prefix {

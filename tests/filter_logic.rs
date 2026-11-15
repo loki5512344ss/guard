@@ -1,3 +1,6 @@
+//! Integration tests for the accept-path filters: token-bucket rate limiting
+//! and blacklist TTL handling.
+
 use std::net::{IpAddr, Ipv4Addr};
 use std::time::Duration;
 

@@ -1,4 +1,4 @@
-//! Секции единого конфига платформы.
+//! Sections of the platform config.
 
 mod detect;
 mod edge;

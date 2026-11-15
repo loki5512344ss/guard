@@ -1,3 +1,5 @@
+//! `status` subcommand: print the manager health summary.
+
 pub async fn run() -> anyhow::Result<()> {
 	println!("Rampart Status");
 	println!("================\n");

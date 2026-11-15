@@ -1,3 +1,5 @@
+//! Config parsing tests: defaults, section parsing and rejected invariants.
+
 use rampart::config::Config;
 
 #[test]

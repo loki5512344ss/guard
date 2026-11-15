@@ -1,5 +1,6 @@
-//! Интеграционные тесты Traffic Intelligence в hot path: авто-бан по
-//! репутации, детектор атак на синтетическом всплеске, алерты на переходах.
+//! Integration tests for Traffic Intelligence on the hot path: auto-ban driven
+//! by reputation, attack detection on a synthetic spike and alerts on state
+//! transitions.
 
 use rampart::config::DetectAutobanConfig;
 use rampart::filter::blacklist::Blacklist;
@@ -30,7 +31,7 @@ fn reputation_fall_after_drops_triggers_autoban() {
 	let attacker = ip([198, 51, 100, 7]);
 
 	for _ in 0..6 {
-		// Шесть дропов rate-limit'ом: -10 за каждый, порог auto-ban = -50.
+		// Six drops through the rate limiter: -10 each, auto-ban threshold is -50.
 		reputation.record_bad(attacker);
 		hook.on_connection_end(attacker);
 	}
@@ -53,7 +54,7 @@ fn autoban_ttl_expires_ban() {
 		Arc::clone(&reputation),
 		Arc::clone(&blacklist),
 		autoban_cfg(true),
-		// Короткий TTL из «конфига» как мок времени.
+		// Zero TTL taken from the config as a time mock.
 		0,
 	);
 	let attacker = ip([198, 51, 100, 8]);
@@ -72,12 +73,12 @@ fn autoban_ttl_expires_ban() {
 fn detector_flags_synthetic_traffic_spike() {
 	let mut detector = AttackDetector::new();
 
-	// Базовая линия: тихий профиль.
+	// Baseline: a quiet profile.
 	for _ in 0..12 {
 		detector.analyze(500.0, 50.0);
 	}
 
-	// Синтетический всплеск: x200 pps и cps три окна подряд.
+	// Synthetic spike: 200x pps and cps for three consecutive windows.
 	assert_eq!(
 		detector.analyze(100_000.0, 10_000.0),
 		AttackStatus::Suspicious,

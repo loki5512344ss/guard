@@ -23,10 +23,10 @@ impl XdpFilter {
 		Ok(())
 	}
 
-	/// Честная ошибка: чтение `prefix_stats` не подключено без feature `xdp`.
+	/// Honest failure: reading `prefix_stats` is not wired up without the `xdp` feature.
 	///
 	/// # Errors
-	/// Всегда — сборка без XDP не имеет доступа к картам ядра.
+	/// Always: a build without XDP has no access to the kernel maps.
 	pub fn read_prefix_stats(&self) -> Result<Vec<(PrefixKey, PrefixStatsVal)>> {
 		anyhow::bail!("prefix_stats reading not wired yet: built without xdp feature")
 	}

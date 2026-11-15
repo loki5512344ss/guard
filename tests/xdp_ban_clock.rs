@@ -1,14 +1,14 @@
-//! Часы бана: XDP сравнивает expiry с `bpf_ktime_get_ns()` (монотонные ns
-//! с загрузки), поэтому userspace обязан писать то же самое. Регрессия:
-//! раньше писался `SystemTime` (epoch ns ≈ 1.7e18), и бан не истекал никогда.
+//! Ban clock: XDP compares expiry against `bpf_ktime_get_ns()` (monotonic nanoseconds
+//! since boot), so userspace must write the same clock. Regression: `SystemTime` (epoch
+//! nanoseconds, about 1.7e18) used to be written, and bans never expired.
 #![cfg(feature = "xdp")]
 
 use rampart::xdp::monotonic_ns;
 
 fn clock_monotonic_ns() -> u64 {
 	let mut ts = libc::timespec { tv_sec: 0, tv_nsec: 0 };
-	// SAFETY: `ts` — валидный writable `timespec`; CLOCK_MONOTONIC на Linux
-	// поддерживается всегда (xdp-фича собирается только под Linux).
+	// SAFETY: `ts` is a valid, writable `timespec`, and CLOCK_MONOTONIC is always
+	// supported on Linux (the xdp feature only builds on Linux).
 	let rc = unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut ts) };
 	assert_eq!(rc, 0, "clock_gettime(CLOCK_MONOTONIC) failed");
 	let secs = u64::try_from(ts.tv_sec).expect("tv_sec fits u64");

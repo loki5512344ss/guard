@@ -2,7 +2,7 @@ use anyhow::Result;
 use std::future::Future;
 use std::net::IpAddr;
 
-/// Значение карты `prefix_stats`.
+/// Value of the `prefix_stats` map.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct PrefixStatsVal {
@@ -12,7 +12,7 @@ pub struct PrefixStatsVal {
 }
 
 impl PrefixStatsVal {
-	/// Разбирает сырые 24 байта значения карты.
+	/// Parses the raw 24-byte map value.
 	#[must_use]
 	pub fn from_bytes(bytes: [u8; 24]) -> Self {
 		let read_u64 =
@@ -24,7 +24,7 @@ impl PrefixStatsVal {
 		}
 	}
 
-	/// Сериализует значение в сырые 24 байта карты.
+	/// Serialises the value into the raw 24-byte map layout.
 	#[must_use]
 	pub fn to_bytes(self) -> [u8; 24] {
 		let mut out = [0u8; 24];
@@ -35,10 +35,10 @@ impl PrefixStatsVal {
 	}
 }
 
-/// Агрегат по одному префиксу за окно детекции.
+/// Aggregated counters for one prefix over a detection window.
 ///
-/// `unique_sources == 0` означает, что источник не считает уникальные адреса
-/// (XDP-путь); spoof-gate в этом случае Block не подтверждает.
+/// `unique_sources == 0` means the source does not count distinct addresses
+/// (the XDP path), and the spoof gate then never confirms `Block`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct PrefixSnapshot {
 	pub syn_count: u64,
@@ -47,16 +47,17 @@ pub struct PrefixSnapshot {
 	pub unique_sources: u64,
 }
 
-/// Источник агрегатов по префиксам. Позволяет тестам работать без ядра.
+/// Source of per-prefix aggregates; keeps tests independent of the kernel.
 pub trait PrefixStatsSource {
-	/// Снимок агрегатов за текущее окно.
+	/// Snapshot of the aggregates for the current window.
 	///
 	/// # Errors
-	/// Ошибка чтения источника (карта не загружена, BPF-сбой и т.п.).
+	/// Returns an error when the source cannot be read (map not loaded, BPF
+	/// failure and similar).
 	fn snapshot(&self) -> impl Future<Output = Result<Vec<(IpAddr, PrefixSnapshot)>>> + Send;
 }
 
-/// Эскалация вердиктов subnet-level детектора.
+/// Verdict escalation ladder of the subnet-level detector.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SubnetVerdict {
 	Monitor,
@@ -65,7 +66,7 @@ pub enum SubnetVerdict {
 	Block,
 }
 
-/// Вердикт по одному префиксу.
+/// Verdict for a single prefix.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PrefixVerdict {
 	pub prefix: IpAddr,
@@ -73,12 +74,13 @@ pub struct PrefixVerdict {
 	pub snapshot: PrefixSnapshot,
 }
 
-/// Детектор распределённых атак по префиксам.
+/// Detector for distributed attacks at prefix granularity.
 ///
-/// Лестница эскалации по `syn_count` за окно: `< threshold` → Monitor,
-/// `< 2×threshold` → StrictLimit, иначе Challenge; Block только при
-/// `≥ 4×threshold` И прохождении spoof-gate (≥ `min_unique_sources`
-/// уникальных IP — защита от ложного бана CGNAT/спуфинга).
+/// Escalation ladder over the `syn_count` of one window: below `threshold` is
+/// `Monitor`, below `2 x threshold` is `StrictLimit`, anything higher is
+/// `Challenge`. `Block` requires at least `4 x threshold` *and* a passed spoof
+/// gate (at least `min_unique_sources` distinct IPs), which guards against
+/// false bans of CGNAT ranges and spoofed sources.
 #[derive(Debug, Clone)]
 pub struct SubnetDetector {
 	syn_threshold: u64,
@@ -99,7 +101,7 @@ impl SubnetDetector {
 		Self::new(config.syn_threshold, config.min_unique_sources)
 	}
 
-	/// Оценивает снимок и возвращает вердикты по активным префиксам.
+	/// Evaluates a snapshot and returns verdicts for all active prefixes.
 	#[must_use]
 	pub fn evaluate(&self, snapshots: &[(IpAddr, PrefixSnapshot)]) -> Vec<PrefixVerdict> {
 		snapshots
@@ -131,14 +133,15 @@ impl SubnetDetector {
 
 	#[must_use]
 	fn spoof_gate_passed(&self, snap: &PrefixSnapshot) -> bool {
-		// gate отключён (min_unique_sources == 0) либо подтверждено разнообразие.
+		// The gate is disabled (min_unique_sources == 0) or diversity is confirmed.
 		self.min_unique_sources == 0 || snap.unique_sources >= self.min_unique_sources
 	}
 }
 
-/// Реализация [`PrefixStatsSource`] поверх XDP-фильтра (feature `xdp`).
-/// Читает карту `prefix_stats`; уникальные источники ядро не считает,
-/// поэтому spoof-gate на этом пути Block не подтверждает.
+/// [`PrefixStatsSource`] backed by the XDP filter (feature `xdp`).
+///
+/// Reads the `prefix_stats` map. The kernel does not track distinct source
+/// addresses, so the spoof gate never confirms `Block` on this path.
 #[cfg(feature = "xdp")]
 pub struct XdpPrefixStats {
 	filter: std::sync::Arc<std::sync::Mutex<crate::xdp::XdpFilter>>,
@@ -151,10 +154,11 @@ impl XdpPrefixStats {
 		Self { filter }
 	}
 
-	/// Блокирует мьютекс фильтра (для kernel-enforcement вердиктов).
+	/// Locks the filter mutex (needed for kernel enforcement of verdicts).
 	///
 	/// # Panics
-	/// Если мьютекс отравлен (паника в другом потоке во время удержания).
+	/// Panics if the mutex is poisoned, that is, if another thread panicked
+	/// while holding it.
 	pub fn filter_lock(&self) -> std::sync::MutexGuard<'_, crate::xdp::XdpFilter> {
 		self.filter.lock().expect("xdp lock poisoned")
 	}

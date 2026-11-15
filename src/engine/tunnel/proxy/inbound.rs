@@ -8,6 +8,13 @@ use tokio::net::TcpStream;
 const SIGNATURE: [u8; 12] = *b"\r\n\r\n\0\r\nQUIT\n";
 const FIXED_HEADER_BYTES: usize = 16;
 
+/// Reads and validates an inbound PROXY protocol v2 header.
+///
+/// The whole header must arrive within `timeout`.
+///
+/// # Errors
+/// Fails on timeout, on a bad signature or command, on an unsupported address
+/// family, on TLVs, and on a header larger than `max_header_bytes`.
 pub(crate) async fn read_v2_header(
 	stream: &mut TcpStream,
 	timeout: Duration,

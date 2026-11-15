@@ -1,4 +1,5 @@
-//! Runtime edge-демона: сборка компонентов, фоновые задачи и запуск listener.
+//! Edge daemon runtime: component assembly, background tasks and listener
+//! startup.
 
 use crate::config::Config;
 use crate::engine::challenge::DifficultyAdjuster;
@@ -32,12 +33,12 @@ fn attack_status_value(status: AttackStatus) -> i64 {
 	}
 }
 
-/// Точка входа edge-демона (`rampart`): то, что делал `main` бинаря.
+/// Entry point of the edge daemon (`rampart`).
 ///
-/// Возвращает [`RunExit`] — выбор кода и самого завершения делает бинарь.
+/// Returns [`RunExit`]; the binary decides whether and how the process ends.
 ///
 /// # Errors
-/// Ошибки старта: нечитаемый конфиг, пустой реестр протоколов, сбой listener.
+/// Startup failures: unreadable config, empty protocol registry, listener error.
 pub async fn run() -> anyhow::Result<RunExit> {
 	tracing_subscriber::fmt()
 		.with_env_filter(EnvFilter::from_default_env().add_directive("rampart=info".parse()?))
@@ -163,7 +164,7 @@ pub async fn run() -> anyhow::Result<RunExit> {
 					let status = det.lock().expect("detector lock poisoned").analyze(pps, cps);
 					metrics::ATTACK_STATUS.set(attack_status_value(status));
 					if let Some(alert) = alert_dispatcher.on_status(status) {
-						// Дедупликация: алерт только на переходе состояния атаки.
+						// Deduplication: an alert is emitted only on an attack state transition.
 						metrics::INTEL_ALERTS_TOTAL.inc();
 						tracing::warn!(pps, cps, "{alert}");
 						push_attack_event(&ch, pps).await;
@@ -208,8 +209,8 @@ pub async fn run() -> anyhow::Result<RunExit> {
 			result?;
 			Ok(RunExit::Ok)
 		}
-		// Drain-таймаут сработал: возвращаем сигнал бинарю завершить процесс
-		// немедленно, как это делал прежний `process::exit(0)`.
+		// The drain timeout fired: hand the signal back so the binary can end the
+		// process immediately, replacing the former `process::exit(0)`.
 		_ = drain_rx => Ok(RunExit::DrainTimeout),
 	}
 }

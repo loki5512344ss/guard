@@ -28,8 +28,12 @@ impl AttackDetector {
 		}
 	}
 
-	/// Анализирует окно метрик (пакеты/с и новые соединения/с) относительно
-	/// накопленных профилей. Аномалией считается всплеск любой из метрик.
+	/// Analyses one metrics window (packets/s and new connections/s) against
+	/// the accumulated profiles.
+	///
+	/// A spike in either metric counts as an anomaly. Three consecutive
+	/// anomalous windows escalate to [`AttackStatus::UnderAttack`]; a single
+	/// one above the suspicious score yields [`AttackStatus::Suspicious`].
 	pub fn analyze(&mut self, pps: f64, cps: f64) -> AttackStatus {
 		self.pps_profiler.record(pps);
 		self.cps_profiler.record(cps);

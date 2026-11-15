@@ -1,7 +1,9 @@
+//! `doctor` subcommand: environment, manager API and XDP diagnostics.
+
 use crate::xdp::{EnvironmentReport, FilesystemProbe, SystemProbe};
 
-/// Ищет интерфейс с маршрутом по умолчанию в /proc/net/route
-/// (destination == 00000000). Работает без root.
+/// Finds the interface that owns the default route in `/proc/net/route`
+/// (destination `00000000`). Works without root.
 fn default_route_interface(probe: &impl SystemProbe) -> Option<String> {
 	let routes = probe.read_file("/proc/net/route").ok()?;
 	routes.lines().skip(1).find_map(|line| {
@@ -10,7 +12,7 @@ fn default_route_interface(probe: &impl SystemProbe) -> Option<String> {
 	})
 }
 
-/// Подсекция network/XDP: что видно окружению без root.
+/// Network/XDP section: what the environment exposes without root.
 fn print_network_section(all_ok: &mut bool) {
 	println!("\nNetwork / XDP");
 	println!("-------------");
@@ -57,6 +59,7 @@ fn print_network_section(all_ok: &mut bool) {
 	}
 }
 
+/// Runs every diagnostic and prints the report.
 pub async fn run() -> anyhow::Result<()> {
 	println!("Rampart Diagnostics");
 	println!("=====================\n");

@@ -71,8 +71,11 @@ impl RateLimiter {
 		self.buckets.is_empty()
 	}
 
-	/// Эвиктит простаивающие бакеты. Запускается, когда бакетов больше
-	/// MAX_BUCKETS либо по расписанию (раз в SWEEP_INTERVAL).
+	/// Evicts idle buckets.
+	///
+	/// Runs either when the table grows past `MAX_BUCKETS` (cap enforcement)
+	/// or once per `SWEEP_INTERVAL`. Buckets touched within `eviction_idle`
+	/// survive, so active sources keep their token state.
 	pub fn sweep(&self) {
 		let now = Instant::now();
 		let elapsed_secs = now.duration_since(self.epoch).as_secs();

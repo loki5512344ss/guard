@@ -1,4 +1,5 @@
-//! Сервисы edge-демона: реестр протоколов, whitelist, XDP и subnet-трекер.
+//! Edge daemon services: protocol registry, whitelist, XDP and the subnet
+//! tracker.
 
 use crate::config::Config;
 use crate::engine::subnet::tracker::SubnetTracker;
@@ -13,11 +14,11 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use tokio::sync::watch;
 
-/// Собирает реестр протоколов из скомпилированных реализаций.
+/// Builds the protocol registry from the compiled handlers.
 ///
-/// Обработчики поставляются фичами: `protocol-http` регистрирует
-/// HTTP/1.1-обработчик с политикой из секции `[protocol.http]`.
-/// Внешние крейты регистрируют свои обработчики в этом же месте.
+/// Handlers are supplied by features: `protocol-http` registers the HTTP/1.1
+/// handler with the policy from `[protocol.http]`. External crates register
+/// their handlers at the same point.
 pub(crate) fn build_registry(config: &Config) -> ProtocolRegistry {
 	#[cfg(feature = "protocol-minecraft")]
 	if config.protocol.minecraft.enabled {
@@ -115,8 +116,8 @@ pub(crate) fn start_xdp(
 	Ok(None)
 }
 
-/// Юзерспейс-агрегатор префиксов: активен, когда detect.prefix включён,
-/// а XDP-путь не работает (не собран или выключен в конфиге).
+/// Userspace prefix aggregator: active when `detect.prefix` is enabled and the
+/// XDP path does not run (not compiled in or disabled in the config).
 pub(crate) fn start_subnet_tracker(config: &Config) -> Option<Arc<SubnetTracker>> {
 	let xdp_active = cfg!(feature = "xdp") && config.xdp.enabled;
 	if config.detect.prefix.enabled && !xdp_active {
@@ -131,11 +132,12 @@ pub(crate) fn start_subnet_tracker(config: &Config) -> Option<Arc<SubnetTracker>
 	}
 }
 
-/// Store-фичи проверяются на старте edge-демона: конфиг, запрашивающий redis,
-/// в бинаре без `store-redis` должен упасть сразу, а не молча потерять
-/// blacklist-sync (sync-задача в runtime.rs живёт под тем же cfg).
-/// Точка вызова — `build_whitelist`: ближайший `?`-хук, принимающий конфиг
-/// до бинда listener'а (сам runtime.rs вне правок этой задачи).
+/// Validates store features at edge startup: a config that asks for redis in a
+/// binary without `store-redis` must fail immediately instead of silently losing
+/// blacklist sync (the sync task in `runtime.rs` lives behind the same cfg).
+///
+/// Called from `build_whitelist`, the closest `?` hook that receives the config
+/// before the listener binds.
 fn ensure_store_features(config: &Config) -> anyhow::Result<()> {
 	#[cfg(not(feature = "store-redis"))]
 	if config.store.redis_url.as_deref().is_some_and(|url| !url.is_empty()) {
@@ -146,6 +148,11 @@ fn ensure_store_features(config: &Config) -> anyhow::Result<()> {
 	Ok(())
 }
 
+/// Parses `whitelist` entries into a shared address set.
+///
+/// # Errors
+/// Fails on an invalid entry or when the config requires store features that are
+/// not compiled in.
 pub(crate) fn build_whitelist(config: &Config) -> anyhow::Result<Arc<HashSet<IpAddr>>> {
 	ensure_store_features(config)?;
 	let mut set = HashSet::with_capacity(config.whitelist.len());
@@ -191,10 +198,10 @@ mod tests {
 		assert!(ensure_store_features(&config_with_redis()).is_ok());
 	}
 
-	/// Wiring-тасовка XDP auto-ban: `start_xdp` обязан принимать `Arc<Blacklist>`
-	/// (т.е. существовать в сигнатуре с blacklist) и при выключенном `[xdp]`
-	/// не трогать ни ядро, ни blacklist. Порядок `set_autoban` -> `load()`
-	/// внутри enabled-ветки без ядра непроверяем — см. комментарий на месте вызова.
+	/// XDP auto-ban wiring: `start_xdp` must accept the `Arc<Blacklist>` and, with
+	/// `[xdp]` disabled, touch neither the kernel nor the blacklist. The
+	/// `set_autoban` -> `load()` order inside the enabled branch cannot be checked
+	/// without a kernel.
 	#[test]
 	fn start_xdp_accepts_blacklist_and_skips_kernel_when_disabled() {
 		let (_tx, rx) = watch::channel(false);

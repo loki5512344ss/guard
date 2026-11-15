@@ -3,23 +3,45 @@
 
 #include "common.h"
 
-// ── Per-prefix traffic statistics (shared ABI with Rust userspace) ──
-// Layout is part of the userspace contract — do not reorder fields.
+/**
+ * Per-prefix traffic statistics.
+ *
+ * The key layout is shared with the Rust userspace, which reads and resets
+ * these counters, so the fields must not be reordered. Coarse prefixes rather
+ * than single hosts keep the table small while still exposing a source
+ * subnet that floods.
+ */
 
-// family: 4 = IPv4 /24 префикс, 6 = IPv6 /64 префикс
+/**
+ * Prefix key.
+ *
+ * family selects the prefix width (see PREFIX_FAMILY_V4 / PREFIX_FAMILY_V6);
+ * addr holds network-order prefix bytes, zero-padded to 16.
+ */
 struct prefix_key {
     __u8 family;
     __u8 pad[7];
-    __u8 addr[16];   // network-order байты префикса, zero-padded
+    __u8 addr[16];   // network-order prefix bytes, zero-padded
 };
 
+/**
+ * Counters accumulated for one prefix.
+ *
+ * last_seen_ns is a bpf_ktime_get_ns() timestamp, so userspace can ignore
+ * prefixes that went quiet without keeping its own clock.
+ */
 struct prefix_stats_val {
     __u64 syn_count;
     __u64 pkt_count;
     __u64 last_seen_ns;   // bpf_ktime_get_ns()
 };
 
-// 🔗 Prefix statistics (LRU) — читается и сбрасывается юзерспейсом
+/**
+ * Prefix statistics table.
+ *
+ * LRU because the number of distinct sources is attacker-controlled; the
+ * userspace detector reads and resets the entries on its own schedule.
+ */
 struct {
     __uint(type, BPF_MAP_TYPE_LRU_HASH);
     __uint(max_entries, 65536);
@@ -30,17 +52,33 @@ struct {
 #define PREFIX_FAMILY_V4 4
 #define PREFIX_FAMILY_V6 6
 
-// ── Build /24 IPv4 prefix key (network-order, low 8 bits masked out) ──
+/**
+ * Build a /24 IPv4 prefix key.
+ *
+ * Copies the address in network order and clears the low octet, which is
+ * exactly a /24 mask without an arithmetic round trip.
+ *
+ * @param key               key to initialise
+ * @param src_ip_net_order  source address, network byte order
+ */
 static __always_inline void prefix_key_from_v4(struct prefix_key *key,
                                                __u32 src_ip_net_order)
 {
     __builtin_memset(key, 0, sizeof(*key));
     key->family = PREFIX_FAMILY_V4;
     __builtin_memcpy(key->addr, &src_ip_net_order, 4);
-    key->addr[3] = 0; // обнулить младшие 8 бит адреса
+    key->addr[3] = 0; // mask the low octet to get a /24
 }
 
-// ── Build /64 IPv6 prefix key (network-order, low 64 bits masked out) ──
+/**
+ * Build a /64 IPv6 prefix key.
+ *
+ * Only the high 64 bits are copied; the remainder stays zero from the
+ * memset, giving a /64 mask in network order.
+ *
+ * @param key       key to initialise
+ * @param src_addr  16-byte source address, network byte order
+ */
 static __always_inline void prefix_key_from_v6(struct prefix_key *key,
                                                const __u8 src_addr[16])
 {
@@ -49,8 +87,17 @@ static __always_inline void prefix_key_from_v6(struct prefix_key *key,
     __builtin_memcpy(key->addr, src_addr, 8);
 }
 
-// ── Increment per-prefix counters (sliding window handled in userspace) ──
-// is_syn: 1 → syn_count++, 0 → pkt_count++; last_seen_ns updated всегда.
+/**
+ * Increment the counters for one prefix.
+ *
+ * Creates the entry on first sight. is_syn selects the counter to bump, so a
+ * SYN flood and a payload flood stay distinguishable downstream; last_seen_ns
+ * is refreshed on every call. The rate window itself lives in userspace.
+ *
+ * @param key     prefix key, already built
+ * @param is_syn  1 counts a SYN, 0 counts any other packet
+ * @param now     current bpf_ktime_get_ns() timestamp
+ */
 static __always_inline void update_prefix_stats(struct prefix_key *key,
                                                 __u8 is_syn, __u64 now)
 {

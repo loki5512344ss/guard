@@ -1,3 +1,5 @@
+//! Integration tests for the HTTP/1.1 protocol handler: request-head
+//! accumulation across fragmented writes and policy rejection paths.
 #![cfg(feature = "protocol-http")]
 
 use rampart::config::HttpProtocolConfig;

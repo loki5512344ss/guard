@@ -1,15 +1,15 @@
 use std::fmt;
 
-/// Минимально поддерживаемая версия ядра: 5.15 LTS.
+/// Minimum supported kernel version: 5.15 LTS.
 pub const MIN_KERNEL: KernelVersion = KernelVersion::new(5, 15, 0);
 
 pub(super) const OSRELEASE_PATH: &str = "/proc/sys/kernel/osrelease";
 pub(super) const BTF_PATH: &str = "/sys/kernel/btf/vmlinux";
 const STATUS_PATH: &str = "/proc/self/status";
 
-/// Драйверы с известной поддержкой native XDP (по данным xdpgeneric/native
-/// матриц upstream-ядра). Отсутствие в списке не означает отсутствие поддержки,
-/// но для таких драйверов предсказываем generic mode.
+/// Drivers with known native XDP support (from the upstream kernel's native/generic
+/// matrices). Absence from this list does not mean support is missing, but for such
+/// drivers generic mode is predicted.
 const NATIVE_XDP_DRIVERS: &[&str] = &[
 	"virtio_net",
 	"ixgbe",
@@ -31,7 +31,7 @@ const NATIVE_XDP_DRIVERS: &[&str] = &[
 	"macvlan",
 ];
 
-/// Версия ядра Linux, пригодная для сравнения (`major.minor.patch`).
+/// Linux kernel version, suitable for comparison (`major.minor.patch`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct KernelVersion {
 	pub major: u16,
@@ -45,9 +45,9 @@ impl KernelVersion {
 		Self { major, minor, patch }
 	}
 
-	/// Парсит строку формата `uname -r`. Берёт первые три числовых компонента,
-	/// дистрибутивные суффиксы (`6.8.0-45-generic`, `5.15.0-rc2`) отбрасываются.
-	/// Строка без цифр не парсится.
+	/// Parses a `uname -r` style string. Takes the first three numeric components and
+	/// discards distribution suffixes (`6.8.0-45-generic`, `5.15.0-rc2`). A string without
+	/// digits does not parse.
 	#[must_use]
 	pub fn parse(release: &str) -> Option<Self> {
 		let mut nums = release
@@ -66,15 +66,16 @@ impl fmt::Display for KernelVersion {
 	}
 }
 
-/// Режим присоединения XDP-программы к интерфейсу.
+/// Mode in which the XDP program is attached to the interface.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AttachMode {
-	/// Программа исполняется в контексте драйвера NIC — минимальные накладные расходы.
+	/// The program runs in the NIC driver context: lowest overhead.
 	Native,
-	/// Программа вызывается из сетевого стека после ingress — работает везде, дороже по CPU.
+	/// The program is invoked from the network stack after ingress: works everywhere, but
+	/// costs more CPU.
 	Generic,
-	/// Аппаратная разгрузка в NIC — требует явного включения и поддержки железа,
-	/// автоматически не выбирается.
+	/// Hardware offload into the NIC: requires explicit enablement and hardware support,
+	/// never selected automatically.
 	Offload,
 }
 
@@ -88,13 +89,13 @@ impl fmt::Display for AttachMode {
 	}
 }
 
-/// Абстракция над procfs/sysfs: реальная реализация — [`FilesystemProbe`],
-/// в тестах — мок. Изолирует диагностику от реального ядра.
+/// Abstraction over procfs/sysfs: the real implementation is [`FilesystemProbe`], tests
+/// supply a mock. Keeps the diagnostics independent of the real kernel.
 pub trait SystemProbe {
-	/// Читает файл целиком.
+	/// Reads a file in full.
 	///
 	/// # Errors
-	/// Проксирует ошибку чтения файла.
+	/// Proxies the file read error.
 	fn read_file(&self, path: &str) -> std::io::Result<String>;
 
 	#[must_use]
@@ -107,7 +108,7 @@ pub trait SystemProbe {
 	fn effective_uid(&self) -> u32;
 }
 
-/// Реальная реализация [`SystemProbe`] поверх `std::fs`.
+/// Real [`SystemProbe`] implementation on top of `std::fs`.
 pub struct FilesystemProbe;
 
 impl SystemProbe for FilesystemProbe {
@@ -123,10 +124,10 @@ impl SystemProbe for FilesystemProbe {
 		Some(std::fs::read_link(path).ok()?.to_string_lossy().into_owned())
 	}
 
-	/// Эвристика: эффективный uid берётся из `/proc/self/status`.
-	/// root почти всегда имеет CAP_BPF/CAP_NET_ADMIN (если явно не урезаны);
-	/// для не-root подтверждение возможно только попыткой attach.
-	/// Нечитаемый статус трактуем как непривилегированный процесс.
+	/// Heuristic: the effective uid is taken from `/proc/self/status`. root almost always
+	/// holds CAP_BPF/CAP_NET_ADMIN (unless explicitly dropped); for non-root the only
+	/// confirmation is an actual attach attempt. An unreadable status is treated as an
+	/// unprivileged process.
 	fn effective_uid(&self) -> u32 {
 		std::fs::read_to_string(STATUS_PATH)
 			.ok()
@@ -147,7 +148,7 @@ pub(super) fn driver_from_link(target: &str) -> Option<String> {
 	(!name.is_empty()).then(|| name.to_owned())
 }
 
-/// Поддерживает ли драйвер native XDP (по таблице известных драйверов).
+/// Whether the driver supports native XDP (per the table of known drivers).
 #[must_use]
 pub fn driver_supports_native_xdp(driver: &str) -> bool {
 	NATIVE_XDP_DRIVERS.contains(&driver)

@@ -1,3 +1,5 @@
+//! `blacklist` subcommands: manage the manager blacklist over its HTTP API.
+
 use serde::Deserialize;
 use serde::Serialize;
 

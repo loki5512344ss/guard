@@ -1,20 +1,21 @@
-//! Prometheus-метрики загрузчика XDP.
+//! Prometheus metrics of the XDP loader.
 //!
-//! Регистрируются в глобальный реестр `prometheus` (тот же, что собирает
-//! `prometheus::gather()` в `crate::metrics::run_metrics_server`), поэтому
-//! endpoint `/metrics` подхватывает их без правок вне `src/xdp/`.
+//! They register into the global `prometheus` registry — the same one that
+//! `prometheus::gather()` in `crate::metrics::run_metrics_server` scrapes — so the
+//! `/metrics` endpoint picks them up without changes outside `src/xdp/`.
 
 use prometheus::{IntCounter, register_int_counter};
 use std::sync::LazyLock;
 
-/// Сколько раз событие XDP-ringbuf привело к userspace-авто-бану
-/// (счётчик инкрементится только на НОВЫЙ бан, не на продление).
+/// How many times an XDP ringbuf event resulted in a userspace auto-ban.
+///
+/// The counter is incremented only for a new ban, never for a refresh of an active one.
 pub static XDP_AUTOBANS_TOTAL: LazyLock<IntCounter> = LazyLock::new(|| {
 	register_int_counter!("rampart_xdp_autobans_total", "Auto-bans issued from XDP ringbuf events")
 		.expect("XDP_AUTOBANS_TOTAL")
 });
 
-/// Форсирует регистрацию счётчика (для вызова на старте загрузки XDP).
+/// Forces registration of the counter (called at the start of the XDP load).
 pub fn init() {
 	LazyLock::force(&XDP_AUTOBANS_TOTAL);
 }

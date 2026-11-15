@@ -1,3 +1,9 @@
+//! Protocol handler contracts.
+//!
+//! Owns the [`ProtocolHandler`] trait implemented by L7 plugins and the
+//! [`ProtocolRegistry`] that selects the active handler at startup. Concrete
+//! handlers live behind features (`protocol-http`, `protocol-minecraft`).
+
 #[cfg(feature = "protocol-http")]
 pub mod http;
 #[cfg(feature = "protocol-minecraft")]
@@ -7,8 +13,8 @@ use std::future::Future;
 use std::pin::Pin;
 use tokio::net::TcpStream;
 
-/// Результат успешного protocol-handshake: адрес upstream-бэкенда,
-/// на который нужно проксировать соединение.
+/// Result of a successful protocol handshake: the upstream backend address the
+/// connection must be proxied to.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Upstream {
 	pub addr: String,
@@ -45,30 +51,31 @@ impl HandshakeResult {
 	}
 }
 
-/// Точка расширения платформы: реализация для конкретного L7-протокола.
+/// Platform extension point: one implementation per L7 protocol.
 ///
-/// Контракт минимальный: обработчик проводит handshake с клиентом
-/// (чтение/запись в поток до момента, когда можно проксировать) и
-/// возвращает целевой [`Upstream`]. Реализации поставляются фичами
-/// (`--features protocol-http`, внешние plugin-крейты) — в ядре их нет.
+/// The contract is deliberately small. A handler drives the handshake with the
+/// client (reading and writing on the stream up to the point where proxying is
+/// possible) and returns the target [`Upstream`]. Implementations ship as
+/// features (`--features protocol-http`, external plugin crates); the core
+/// itself contains none.
 ///
-/// Метод асинхронен через boxed future, чтобы трейт оставался
-/// dyn-совместимым (`ProtocolRegistry` хранит `Box<dyn ProtocolHandler>`).
+/// The method is async through a boxed future so the trait stays
+/// dyn-compatible (`ProtocolRegistry` stores `Box<dyn ProtocolHandler>`).
 pub trait ProtocolHandler: Send + Sync {
-	/// Имя протокола (для метрик, логов и реестра).
+	/// Protocol name, used in metrics, logs and the registry.
 	fn name(&self) -> &'static str;
 
-	/// Проводит handshake с клиентом и определяет upstream.
+	/// Drives the client handshake and resolves the upstream.
 	///
 	/// # Errors
-	/// Возвращает ошибку при невалидном клиентском потоке или отказе в доступе.
+	/// Returns an error when the client stream is invalid or access is denied.
 	fn handshake<'a>(
 		&'a self,
 		stream: &'a mut TcpStream,
 	) -> Pin<Box<dyn Future<Output = anyhow::Result<HandshakeResult>> + Send + 'a>>;
 }
 
-/// Реестр скомпилированных протокольных обработчиков.
+/// Registry of the protocol handlers compiled into this binary.
 #[derive(Default)]
 pub struct ProtocolRegistry {
 	handlers: Vec<Box<dyn ProtocolHandler>>,
@@ -104,11 +111,11 @@ impl ProtocolRegistry {
 		self.handlers.iter().find(|h| h.name() == name).map(|h| h.as_ref())
 	}
 
-	/// Возвращает основной обработчик.
+	/// Returns the primary handler, the first one registered.
 	///
 	/// # Errors
-	/// Возвращает ошибку, если ни один протокол не скомпилирован —
-	/// edge-нода обязана fail-fast на старте в этом случае.
+	/// Returns an error when no protocol is compiled in; an edge node must
+	/// fail fast at startup in that case.
 	pub fn primary(&self) -> anyhow::Result<&dyn ProtocolHandler> {
 		let Some(handler) = self.handlers.first() else {
 			anyhow::bail!(

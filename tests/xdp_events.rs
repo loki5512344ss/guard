@@ -1,5 +1,5 @@
-//! Интеграционные тесты wire-формата и политики авто-бана XDP-событий.
-//! Ядро/Redis не нужны: проверяем чистые парсер и решение + дефолты конфига.
+//! Integration tests for the wire format and the auto-ban policy of XDP events.
+//! No kernel or Redis needed: the pure parser and decision are covered, plus config defaults.
 #![cfg(feature = "xdp")]
 
 use rampart::config::Config;
@@ -8,21 +8,21 @@ use std::net::Ipv4Addr;
 
 const IP: [u8; 4] = [203, 0, 113, 7];
 
-/// Собирает кадр ровно как ядро (`push_event`, common.h:87-97): скаляры — native
-/// (host) order, `src_ip` — сетевой порядок октетов (raw из заголовка пакета).
+/// Builds a frame exactly as the kernel does (`push_event`, common.h:87-97): scalars in
+/// native (host) order, `src_ip` in network octet order (raw from the packet header).
 fn frame(kind: u32, octets: [u8; 4], metadata: u32, ts: u64) -> [u8; XDP_EVENT_LEN] {
 	let mut b = [0u8; XDP_EVENT_LEN];
 	b[0..4].copy_from_slice(&kind.to_ne_bytes());
 	b[4..8].copy_from_slice(&octets);
 	b[8..12].copy_from_slice(&metadata.to_ne_bytes());
-	// b[12..16] — выравнивающий padding под __u64: ядро его не инициализирует.
+	// b[12..16] is padding for `__u64`; the kernel does not initialise it.
 	b[16..24].copy_from_slice(&ts.to_ne_bytes());
 	b
 }
 
 #[test]
 fn struct_size_is_24_bytes() {
-	// Раскладка common.h: __u32×3 + pad(4) + __u64 = 24, НЕ 16 как парсил код ранее.
+	// common.h layout: __u32 x3 + pad(4) + __u64 = 24, not 16 as the code parsed before.
 	assert_eq!(XDP_EVENT_LEN, 24);
 }
 
@@ -47,12 +47,12 @@ fn dirty_padding_does_not_corrupt_parse() {
 
 #[test]
 fn src_ip_is_network_order_octets_not_native_u32() {
-	// КЛЮЧЕВОЙ вывод по endianness: октеты лежат в точковом порядке напрямую.
+	// Key endianness insight: the octets sit in dotted order directly.
 	let f = frame(2, [198, 51, 100, 23], 0, 0);
 	let ev = parse_xdp_event(&f).expect("parses");
 	assert_eq!(ev.src_ip, Ipv4Addr::new(198, 51, 100, 23));
-	// Старый баг (`u32::from_ne_bytes` → Ipv4Addr::from(u32)) на little-endian
-	// давал бы переёрнутый адрес — фиксируем, что мы так НЕ делаем.
+	// The old bug (`u32::from_ne_bytes` -> `Ipv4Addr::from(u32)`) produced a reversed
+	// address on little-endian; this pins down that we do not do that.
 	if cfg!(target_endian = "little") {
 		let naive = u32::from_ne_bytes(<[u8; 4]>::try_from(&f[4..8]).expect("4 octets"));
 		assert_eq!(Ipv4Addr::from(naive), Ipv4Addr::new(23, 100, 51, 198));
@@ -86,14 +86,14 @@ fn decision_matrix_by_type_and_enablement() {
 		enabled: false,
 		..AutoBanConfig::default()
 	};
-	// (kind, metadata=fails/хиты, банить ли при enabled)
+	// (kind, metadata=fails/hits, whether to ban when enabled)
 	let rows = [
-		(0u32, 255u32, false), // EVENT_BAN — ядро уже забанило: никогда
-		(1, 100, true),        // EVENT_RATE_LIMIT — всегда баним
-		(2, 0, false),         // EVENT_POLICY_DROP — политика по дефолту не банит
-		(3, 10, true),         // EVENT_CONN_DROP fails=10 >= 3 — баним
-		(3, 0, false),         // EVENT_CONN_DROP fails=0 (hook-drop) — не баним
-		(3, 2, false),         // EVENT_CONN_DROP fails=2 < 3 — не баним
+		(0u32, 255u32, false), // EVENT_BAN: already banned by the kernel, never
+		(1, 100, true),        // EVENT_RATE_LIMIT: always ban
+		(2, 0, false),         // EVENT_POLICY_DROP: the policy does not ban by default
+		(3, 10, true),         // EVENT_CONN_DROP fails=10 >= 3: ban
+		(3, 0, false),         // EVENT_CONN_DROP fails=0 (hook drop): no ban
+		(3, 2, false),         // EVENT_CONN_DROP fails=2 < 3: no ban
 	];
 	for (kind, meta, should_ban_when_on) in rows {
 		let ev = parse_xdp_event(&frame(kind, IP, meta, 0)).expect("known type");
@@ -160,7 +160,7 @@ auto_ban_conn_drop_fails = 5
 	assert_eq!(policy.duration_secs, 45);
 	assert_eq!(policy.conn_drop_fails, 5);
 
-	// fails=4 ниже нового порога 5 — не бан; fails=5 — бан.
+	// fails=4 is below the new threshold of 5 (no ban); fails=5 reaches it (ban).
 	let below = parse_xdp_event(&frame(3, IP, 4, 0)).expect("frame parses");
 	assert!(auto_ban_decision(&below, &policy).is_none());
 	let at = parse_xdp_event(&frame(3, IP, 5, 0)).expect("frame parses");

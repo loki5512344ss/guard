@@ -1,3 +1,5 @@
+//! Command-line client for the Rampart manager API.
+
 #![allow(clippy::print_stdout, clippy::print_stderr)]
 
 use clap::{Parser, Subcommand};

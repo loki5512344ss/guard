@@ -1,4 +1,4 @@
-//! Wiring-логика edge-демона: сборка сервисов и главный цикл запуска.
+//! Edge daemon wiring: service construction and the main run loop.
 
 pub mod runtime;
 pub mod services;

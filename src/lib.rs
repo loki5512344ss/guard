@@ -1,4 +1,6 @@
-//! Rampart — универсальная платформа сетевой защиты (L3/L4/L7).
+//! Rampart is a universal L3/L4/L7 network protection platform.
+//!
+//! The crate root owns the module tree; each module documents what it owns.
 pub mod app;
 pub mod cli;
 pub mod config;

@@ -1,9 +1,10 @@
-//! Чистый парсер и валидатор HTTP/1.x request-head для edge-фильтра.
+//! Pure HTTP/1.x request-head parser and validator for the edge filter.
 //!
-//! Модуль не знает про I/O: на вход — накопленный заголовок, на выходе —
-//! [`Verdict`]. Это позволяет покрывать логику юнит-тестами без сокетов.
+//! Owns the parsing policy and verdicts only: the module knows nothing about
+//! I/O. Input is the accumulated head, output is a [`Verdict`], which keeps the
+//! logic unit-testable without sockets.
 
-/// Политика проверки, снятая с секции `[protocol.http]`.
+/// Validation policy derived from the `[protocol.http]` section.
 #[derive(Debug, Clone)]
 pub struct Policy {
 	pub max_header_bytes: usize,
@@ -11,7 +12,7 @@ pub struct Policy {
 	pub require_user_agent: bool,
 }
 
-/// Результат проверки головы запроса.
+/// Outcome of validating a request head.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Verdict {
 	Allow { method: String, path: String, host: String },
@@ -21,7 +22,7 @@ pub enum Verdict {
 const ALLOWED_METHODS: [&str; 7] = ["GET", "POST", "PUT", "DELETE", "HEAD", "OPTIONS", "PATCH"];
 const HEADER_TERMINATOR: &[u8] = b"\r\n\r\n";
 
-/// Ищет конец головы запроса (`\r\n\r\n`) и возвращает её полную длину.
+/// Looks for the end of the request head (`\r\n\r\n`) and returns its full length.
 #[must_use]
 pub fn scan_head(buf: &[u8]) -> Option<usize> {
 	buf.windows(HEADER_TERMINATOR.len())
@@ -29,7 +30,7 @@ pub fn scan_head(buf: &[u8]) -> Option<usize> {
 		.map(|pos| pos + HEADER_TERMINATOR.len())
 }
 
-/// Разбирает и валидирует голову запроса согласно политике.
+/// Parses and validates a request head against the policy.
 #[must_use]
 pub fn evaluate(head: &[u8], policy: &Policy) -> Verdict {
 	let Ok(text) = std::str::from_utf8(head) else {

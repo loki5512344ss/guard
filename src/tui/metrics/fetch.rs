@@ -1,38 +1,44 @@
-//! Получение тела `/metrics`: трейт [`Fetcher`] для мока в тестах и HTTP-реализация.
+//! Fetching of the `/metrics` body: the [`Fetcher`] trait for test mocks plus
+//! the HTTP implementation.
+//!
+//! Owns the transport boundary of the TUI; parsing lives in
+//! [`crate::tui::prometheus`].
 
 use std::time::Duration;
 
 use futures::future::BoxFuture;
 use thiserror::Error;
 
-/// Ошибка загрузки метрик.
+/// Metrics fetch failure.
 #[derive(Debug, Error, Clone)]
 pub enum FetchError {
-	/// Сетевая ошибка / DNS / таймаут.
+	/// Network error, DNS failure or timeout.
 	#[error("network error: {0}")]
 	Network(String),
-	/// Endpoint ответил не-200 статусом.
+	/// The endpoint answered with a non-200 status.
 	#[error("http status {0}")]
 	Status(u16),
 }
 
-/// Абстракция источника exposition-текста Prometheus.
+/// Abstraction over a source of Prometheus exposition text.
 pub trait Fetcher: Send + Sync {
-	/// Загружает текущий срез метрик.
+	/// Fetches the current metrics snapshot.
 	///
 	/// # Errors
-	/// Возвращает [`FetchError`] при сетевом сбое или плохом HTTP-статусе.
+	/// Returns [`FetchError`] on a network failure or a bad HTTP status.
 	fn fetch(&self) -> BoxFuture<'_, Result<String, FetchError>>;
 }
 
-/// Реализация [`Fetcher`] поверх reqwest GET.
+/// [`Fetcher`] implementation on top of a reqwest GET.
 pub struct HttpFetcher {
 	url: String,
 	client: reqwest::Client,
 }
 
 impl HttpFetcher {
-	/// Создаёт fetcher с таймаутом запроса 5 секунд.
+	/// Creates a fetcher with a 5 second request timeout.
+	///
+	/// Returns `None` when the HTTP client cannot be built.
 	pub fn new(url: impl Into<String>) -> Option<Self> {
 		let client = reqwest::Client::builder()
 			.timeout(Duration::from_secs(5))

@@ -1,4 +1,6 @@
-//! Management-плоскость Rampart: REST API, аутентификация, синхронизация узлов.
+//! Rampart management plane: REST API, authentication and node synchronisation.
+//!
+//! Owns [`AppState`], the handle shared by every handler through [`SharedState`].
 pub mod api;
 pub mod auth;
 pub mod sync;
@@ -8,10 +10,11 @@ use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::Instant;
 
-/// Общее состояние management-API.
+/// Shared state of the management API.
 pub struct AppState {
-	/// Redis-клиент управления состоянием; присутствует только при собранной
-	/// фиче `store-redis` (manager требует её на старте — см. bin/rampart-manager).
+	/// Redis client for state management; present only when the `store-redis`
+	/// feature is compiled in (the manager requires it at startup, see
+	/// bin/rampart-manager).
 	#[cfg(feature = "store-redis")]
 	pub redis_client: redis::Client,
 	pub jwt_secret: String,

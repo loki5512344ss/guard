@@ -1,4 +1,8 @@
-//! Общее состояние TUI: последний срез метрик, история pps/drops, расчёт rate.
+//! Shared TUI state: the last metrics snapshot, the pps/drops history and the
+//! rate calculation.
+//!
+//! Owns the only hand-off point between the fetch task and the UI loop; every
+//! accessor is mutex-guarded and tolerates a poisoned lock.
 
 use std::collections::VecDeque;
 use std::sync::Mutex;
@@ -6,17 +10,17 @@ use std::time::Instant;
 
 use crate::tui::prometheus::MetricSet;
 
-/// Максимальная длина скользящего окна графика.
+/// Maximum length of the chart's sliding window.
 pub const HISTORY_CAPACITY: usize = 120;
 
-/// Один сэмпл истории (значения — rates, единиц/сек).
+/// A single history sample; the values are rates in units per second.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct HistoryPoint {
 	pub packets_per_sec: f64,
 	pub drops_per_sec: f64,
 }
 
-/// Скользящее окно истории фиксированной ёмкости.
+/// Fixed-capacity sliding window of history samples.
 #[derive(Debug, Clone)]
 pub struct History {
 	points: VecDeque<HistoryPoint>,
@@ -31,7 +35,7 @@ impl Default for History {
 }
 
 impl History {
-	/// Добавляет точку, вытесняя старейшую при переполнении окна.
+	/// Appends a point, evicting the oldest one once the window is full.
 	pub fn push(&mut self, point: HistoryPoint) {
 		if self.points.len() == HISTORY_CAPACITY {
 			self.points.pop_front();
@@ -39,14 +43,14 @@ impl History {
 		self.points.push_back(point);
 	}
 
-	/// Точки в хронологическом порядке.
+	/// Points in chronological order.
 	#[must_use]
 	pub fn points(&self) -> &VecDeque<HistoryPoint> {
 		&self.points
 	}
 }
 
-/// Состояние приложения, общее между fetch-потоком и UI-циклом.
+/// Application state shared between the fetch task and the UI loop.
 #[derive(Debug)]
 pub struct AppState {
 	url: String,
@@ -56,7 +60,7 @@ pub struct AppState {
 }
 
 impl AppState {
-	/// Создаёт состояние с URL источника метрик (для статус-панели).
+	/// Creates the state for a metrics source URL (shown in the status panel).
 	#[must_use]
 	pub fn new(url: impl Into<String>) -> Self {
 		Self {
@@ -67,14 +71,14 @@ impl AppState {
 		}
 	}
 
-	/// URL источника метрик.
+	/// URL of the metrics source.
 	#[must_use]
 	pub fn url(&self) -> &str {
 		&self.url
 	}
 }
 
-/// Последний успешный/неуспешный результат fetch.
+/// Result of the latest successful or failed fetch.
 #[derive(Debug, Default, Clone)]
 pub struct Snapshot {
 	pub metrics: Option<MetricSet>,
@@ -83,7 +87,7 @@ pub struct Snapshot {
 }
 
 impl AppState {
-	/// Записывает результат очередного fetch и обновляет историю rate.
+	/// Records the result of the latest fetch and extends the rate history.
 	pub fn apply_fetch(&self, result: Result<MetricSet, String>, elapsed_secs: f64) {
 		let mut snapshot = match self.snapshot.lock() {
 			Ok(guard) => guard,
@@ -119,9 +123,9 @@ impl AppState {
 		}
 	}
 
-	/// Копия среза метрик + истории для отрисовки кадра.
+	/// Copy of the metrics snapshot plus history for rendering one frame.
 	///
-	/// UI не держит лок — рисуем по снимку.
+	/// The UI never holds a lock: it draws from the copy.
 	#[must_use]
 	pub fn frame_data(&self) -> FrameData {
 		let snapshot = self.snapshot.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -139,21 +143,21 @@ impl AppState {
 	}
 }
 
-/// Снимок для одного кадра UI.
+/// Snapshot consumed by a single UI frame.
 #[derive(Debug, Default, Clone)]
 pub struct FrameData {
-	/// URL источника метрик.
+	/// URL of the metrics source.
 	pub url: String,
 	pub snapshot: Snapshot,
 	pub history: History,
-	/// Время работы TUI (сек).
+	/// TUI uptime in seconds.
 	pub uptime_secs: u64,
 }
 
-/// Rate счётчика из двух сэмплов: `(current - previous) / dt`.
+/// Counter rate from two samples: `(current - previous) / dt`.
 ///
-/// `None` у предыдущего значения (первый сэмпл) даёт 0.0. Сброс счётчика
-/// (`current < previous`) трактуетcя как рестарт процесса → 0.0.
+/// A `None` previous value (first sample) yields 0.0. A counter reset
+/// (`current < previous`) is treated as a process restart and also yields 0.0.
 #[must_use]
 pub fn counter_rate(previous: Option<f64>, current: Option<f64>, elapsed_secs: f64) -> f64 {
 	let (Some(previous), Some(current)) = (previous, current) else {

@@ -1,4 +1,8 @@
-//! Циклы приложения: fetch-таска (tokio) и UI-цикл (tick + события клавиатуры).
+//! Application loops: the fetch task (tokio) and the UI loop (tick plus
+//! keyboard events).
+//!
+//! Owns the wiring between a [`Fetcher`] and the terminal: the fetch task never
+//! draws and the UI loop never performs I/O beyond the terminal itself.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -10,14 +14,14 @@ use crate::tui::prometheus::parse;
 use crate::tui::state::AppState;
 use crate::tui::ui;
 
-/// Управляемые пользователем команды (клавиши).
+/// Commands the user can trigger from the keyboard.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Command {
 	Quit,
 	Refresh,
 }
 
-/// Маппинг клавиш: `q`/`Esc` — выход, `r` — обновить немедленно.
+/// Key mapping: `q`/`Esc` quit, `r` refreshes immediately.
 #[must_use]
 pub fn handle_key(code: crossterm::event::KeyCode) -> Option<Command> {
 	match code {
@@ -27,7 +31,7 @@ pub fn handle_key(code: crossterm::event::KeyCode) -> Option<Command> {
 	}
 }
 
-/// Приводит результат fetch к виду для [`AppState::apply_fetch`].
+/// Converts a fetch result into the shape expected by [`AppState::apply_fetch`].
 pub fn normalize(result: Result<String, FetchError>) -> Result<crate::tui::prometheus::MetricSet, String> {
 	match result {
 		Ok(body) => Ok(parse(&body)),
@@ -36,7 +40,10 @@ pub fn normalize(result: Result<String, FetchError>) -> Result<crate::tui::prome
 	}
 }
 
-/// Фоновая задача: fetch → [`AppState`]. Ошибки сети пишутся в снапшот баннером.
+/// Background task: fetch into [`AppState`].
+///
+/// Network failures are stored in the snapshot and rendered as an error banner,
+/// so a dead endpoint degrades the view instead of ending the session.
 pub async fn spawn_fetch_loop(fetcher: Arc<dyn Fetcher>, state: Arc<AppState>, refresh: Duration, notify: Arc<Notify>) {
 	loop {
 		let started = std::time::Instant::now();
@@ -51,10 +58,11 @@ pub async fn spawn_fetch_loop(fetcher: Arc<dyn Fetcher>, state: Arc<AppState>, r
 	}
 }
 
-/// UI-цикл: рисует кадр каждые ~100 мс, обрабатывает клавиши.
+/// UI loop: draws a frame roughly every 100 ms and handles key presses.
 ///
 /// # Errors
-/// Возвращает ошибку терминала (draw/poll) — вызывающий восстанавливает TTY.
+/// Returns the terminal error from draw/poll; the caller is responsible for
+/// restoring the TTY.
 pub async fn run_ui(
 	terminal: &mut ratatui::Terminal<impl ratatui::backend::Backend<Error = std::io::Error>>,
 	state: Arc<AppState>,
@@ -71,13 +79,13 @@ pub async fn run_ui(
 	}
 }
 
-/// Неблокирующее ожидание клавиши в течение `timeout`.
+/// Non-blocking wait for a key press within `timeout`.
 fn poll_command(timeout: Duration) -> std::io::Result<Option<Command>> {
 	if !crossterm::event::poll(timeout)? {
 		return Ok(None);
 	}
 	if let crossterm::event::Event::Key(key) = crossterm::event::read()? {
-		// Реагируем только на нажатие (не автоповтор/отпускание).
+		// React to presses only, ignoring auto-repeat and key releases.
 		if key.kind == crossterm::event::KeyEventKind::Press {
 			return Ok(handle_key(key.code));
 		}

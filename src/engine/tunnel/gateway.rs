@@ -1,3 +1,6 @@
+//! Per-connection pipeline of the edge engine: filters, PoW gate, protocol
+//! handshake and upstream relay.
+
 mod challenge;
 
 #[cfg(feature = "protocol-minecraft")]
@@ -56,11 +59,11 @@ impl Gateway {
 		}
 	}
 
-	/// Полный конвейер обработки входящего соединения.
+	/// Runs the full pipeline for one inbound connection.
 	///
 	/// # Errors
-	/// Возвращает ошибку только при сбое ввода-вывода апстрима; блокировки
-	/// клиента ошибкой не считаются.
+	/// Only upstream I/O failures are surfaced; a connection dropped by a filter or
+	/// by the challenge gate is not an error.
 	#[allow(unused_mut)]
 	pub async fn handle(&self, mut client: TcpStream, peer_addr: std::net::SocketAddr) -> GatewayOutcome {
 		let client_addr = if self.config.proxy_protocol.ingress_enabled {

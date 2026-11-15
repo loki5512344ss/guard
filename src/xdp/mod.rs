@@ -1,4 +1,8 @@
-//! Загрузчик XDP-программы (L3/L4-уровень защиты).
+//! Loader for the XDP program (L3/L4 protection layer).
+//!
+//! Owns the filter lifecycle (`XdpFilter`), the `.rodata` globals image (`XdpGlobals`),
+//! ringbuf event parsing, XDP metrics and the pre-attach environment probe. Without the
+//! `xdp` feature a no-op filter is exported instead.
 
 mod probe;
 pub use probe::{
@@ -9,7 +13,7 @@ pub use probe::{
 #[cfg(feature = "xdp")]
 mod globals;
 #[cfg(feature = "xdp")]
-pub use globals::XdpGlobals;
+pub use globals::{RODATA_SIZE, XdpGlobals};
 
 #[cfg(feature = "xdp")]
 mod metrics;

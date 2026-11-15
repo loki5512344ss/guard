@@ -1,8 +1,13 @@
+//! Adaptive proof-of-work difficulty driven by the observed connection rate.
+
 use crate::metrics;
 use std::collections::VecDeque;
 use std::time::Instant;
 
-/// Адаптирует сложность PoW к текущему темпу подключений.
+/// Adapts the PoW difficulty to the current connection rate.
+///
+/// The rate is counted over a sliding one-second window and the resulting
+/// difficulty is clamped to `[min, max]`.
 pub struct DifficultyAdjuster {
 	window: VecDeque<Instant>,
 	min: u8,
@@ -17,6 +22,7 @@ impl Default for DifficultyAdjuster {
 }
 
 impl DifficultyAdjuster {
+	/// Creates an adjuster clamped to `min.max(4)` and `max.min(10)`.
 	#[must_use]
 	pub fn new(min: u8, max: u8) -> Self {
 		Self {
@@ -27,6 +33,7 @@ impl DifficultyAdjuster {
 		}
 	}
 
+	/// Records one connection and recomputes the difficulty for the window.
 	pub fn record_connection(&mut self) {
 		let now = Instant::now();
 		self.window.push_back(now);
@@ -50,6 +57,7 @@ impl DifficultyAdjuster {
 		}
 	}
 
+	/// Returns the current difficulty and publishes it to the metrics gauge.
 	#[must_use]
 	pub fn current_difficulty(&self) -> u8 {
 		metrics::POW_CURRENT_DIFFICULTY.set(self.current as i64);

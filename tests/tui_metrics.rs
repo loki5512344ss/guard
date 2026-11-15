@@ -1,11 +1,10 @@
-//! Тесты TUI-модуля: парсер Prometheus, расчёт rate, поведение при ошибках fetch.
+//! Tests for the TUI module: Prometheus parser, rate calculation and fetch
+//! error handling.
 
 use futures::future::BoxFuture;
 use rampart::tui::fetch::{FetchError, Fetcher, HttpFetcher};
 use rampart::tui::prometheus::{MetricSample, parse};
 use rampart::tui::state::{AppState, counter_rate};
-
-// ---------- парсер ----------
 
 #[test]
 fn parses_metric_with_labels_value_and_timestamp() {
@@ -53,11 +52,9 @@ fn parser_tolerates_malformed_lines() {
 	assert_eq!(set.samples().len(), 1);
 }
 
-// ---------- rate ----------
-
 #[test]
 fn rate_from_two_samples_divides_by_elapsed() {
-	// 1200 - 1100 = 100 пакетов за 2 сек
+	// 1200 - 1100 = 100 packets over 2 seconds.
 	assert_eq!(counter_rate(Some(1100.0), Some(1200.0), 2.0), 50.0);
 }
 
@@ -79,8 +76,6 @@ fn state_accumulates_history_rates() {
 	assert!(frame.snapshot.error.is_none());
 }
 
-// ---------- ошибки fetch (мок Fetcher + локальный HTTP-сервер) ----------
-
 struct FailingFetcher {
 	error: FetchError,
 }
@@ -99,7 +94,7 @@ fn network_error_sets_error_banner_not_panic() {
 		error: FetchError::Network("connection refused".to_owned()),
 	};
 
-	// Тот же путь, что и в spawn_fetch_loop: normalize → apply_fetch.
+	// Same path as in spawn_fetch_loop: normalize, then apply_fetch.
 	let normalized = rampart::tui::app::normalize(Err(fetcher.error));
 	assert!(normalized.is_err());
 	let message = match normalized {

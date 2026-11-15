@@ -10,7 +10,7 @@ const CHALLENGE_TTL_SECS: u64 = 30;
 const MAX_NONCE_LEN: usize = 64;
 const ALLOWED_HEX_PREFIX: [u8; 4] = *b"0123";
 
-/// Активная PoW-задача, выданная одному соединению.
+/// Active PoW challenge issued to one connection.
 pub struct Challenge {
 	token: [u8; 32],
 	created_at: Instant,
@@ -31,8 +31,8 @@ impl Challenge {
 		}
 	}
 
-	/// Challenge с явным токеном — для детерминированных тестов, где
-	/// случайный дайджест даёт flaky-исход.
+	/// Builds a challenge with an explicit token.
+	/// Intended for deterministic tests, where a random token makes the outcome
 	#[must_use]
 	pub fn with_token(token: [u8; 32], difficulty: u8) -> Self {
 		Self {
@@ -53,7 +53,9 @@ impl Challenge {
 		hex::encode(self.token)
 	}
 
-	/// Проверяет nonce и помечает challenge использованным при успехе.
+	/// Verifies `nonce` and marks the challenge as used on success.
+	///
+	/// A challenge is single-use and expires after `CHALLENGE_TTL_SECS`.
 	#[must_use]
 	pub fn verify(&mut self, nonce: &str) -> bool {
 		if self.used || self.is_expired() || nonce.len() > MAX_NONCE_LEN {
@@ -78,7 +80,7 @@ impl Challenge {
 	}
 }
 
-/// Переборный решатель hashcash (для клиентов и тестов).
+/// Brute-force hashcash solver used by clients and tests.
 #[must_use]
 pub fn solve(challenge: &str, difficulty: u8) -> Option<String> {
 	let d = difficulty as usize;
@@ -99,10 +101,11 @@ pub fn solve(challenge: &str, difficulty: u8) -> Option<String> {
 	None
 }
 
-/// Проводит текстовый PoW-gate в потоке: выдаёт challenge и проверяет ответ.
+/// Runs the textual PoW gate on `stream`: issues a challenge and checks the
+/// answer.
 ///
 /// # Errors
-/// Возвращает ошибку только при сбое ввода-вывода; неверное решение — `Ok(false)`.
+/// Only I/O failures are reported; a wrong solution is `Ok(false)`.
 pub async fn enforce(stream: &mut TcpStream, peer_ip: IpAddr, difficulty: u8) -> anyhow::Result<bool> {
 	if difficulty == 0 {
 		tracing::debug!("pow: difficulty 0, skipping for {peer_ip}");
@@ -150,8 +153,8 @@ mod tests {
 		let mut challenge = Challenge::generate(4);
 		let challenge_str = challenge.challenge_string();
 
-		// Подбираем nonce, который независимо рассчитанный SHA-256
-		// заведомо отклоняет — тест детерминирован.
+		// Search for a nonce that an independently computed SHA-256 provably rejects,
+		// so the test stays deterministic.
 		let mut wrong_nonce = None;
 		for i in 0..10_000u32 {
 			let candidate = format!("bad-{i}");

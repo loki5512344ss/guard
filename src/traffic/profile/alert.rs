@@ -56,9 +56,11 @@ impl fmt::Display for Alert {
 	}
 }
 
-/// Дедуплицирующий диспетчер алертов: алерт выдаётся только на переходе
-/// состояния детектора (вход в `UnderAttack` и выход из него), не на каждом
-/// тике. Логика — poll-and-persist (LNVPS issue #331).
+/// Deduplicating alert dispatcher.
+///
+/// An alert is emitted only on a detector state transition (entering
+/// `UnderAttack` and leaving it), never on every tick. The behaviour is
+/// poll-and-persist: the previous status is kept as the baseline.
 #[derive(Default)]
 pub struct AlertDispatcher {
 	previous: Mutex<Option<AttackStatus>>,
@@ -69,9 +71,11 @@ impl AlertDispatcher {
 		Self::default()
 	}
 
-	/// Возвращает `Some(Alert)` только при переходе через границу атаки:
-	/// вход в `UnderAttack` («attack started») или выход из него
-	/// («attack ended»). Первое наблюдение алерта не порождает.
+	/// Returns `Some(Alert)` only when the attack boundary is crossed: entering
+	/// `UnderAttack` ("attack started") or leaving it ("attack ended").
+	///
+	/// The first observation never produces an alert, so a node that starts up
+	/// during an attack does not report a transition it never saw.
 	pub fn on_status(&self, status: AttackStatus) -> Option<Alert> {
 		let mut previous = self.previous.lock().expect("alert dispatcher lock poisoned");
 		if *previous == Some(status) {
@@ -89,9 +93,10 @@ impl AlertDispatcher {
 	}
 }
 
-/// Отправляет алерт на webhook (fire-and-forget, с таймаутом).
+/// Delivers an alert to a webhook (fire-and-forget, with a timeout).
 ///
-/// Вызывать следует из фоновых задач: сетевой ввод-вывод недопустим в hot path.
+/// Call it from background tasks only: network I/O is not allowed on the hot
+/// path.
 pub async fn send_webhook(url: String, alert: Alert) {
 	let payload = serde_json::json!({
 		"level": alert.level.to_string(),

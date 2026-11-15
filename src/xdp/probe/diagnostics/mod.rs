@@ -1,8 +1,8 @@
-//! Диагностика окружения перед XDP-attach: ядро, BTF, драйвер NIC, привилегии.
+//! Environment diagnostics before XDP attach: kernel, BTF, NIC driver, privileges.
 //!
-//! Основной источник боли при XDP — непонятные ошибки attach на неподдерживаемых
-//! ядрах и драйверах. Модуль собирает [`EnvironmentReport`] ДО загрузки BPF-программы
-//! и даёт человекочитаемый вердикт с предупреждениями.
+//! The main source of pain with XDP is opaque attach failures on unsupported kernels and
+//! drivers. This module collects an [`EnvironmentReport`] before the BPF program is
+//! loaded and produces a human-readable verdict with warnings.
 
 mod report;
 mod types;

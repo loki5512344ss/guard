@@ -1,10 +1,17 @@
+//! Encoding of upstream PROXY protocol v2 headers.
+
 use std::net::SocketAddr;
 
 mod inbound;
 pub(super) use inbound::read_v2_header;
 
 /// Encodes a PROXY protocol v2 TCP header for the backend.
-/// The backend must accept connections only from trusted Rampart nodes.
+///
+/// The backend must accept connections only from trusted Rampart nodes, since
+/// anyone able to reach it could otherwise forge the source address.
+///
+/// # Errors
+/// Fails when the source and destination address families differ.
 pub(super) fn protocol_v2(source: SocketAddr, destination: SocketAddr) -> anyhow::Result<Vec<u8>> {
 	const SIGNATURE: [u8; 12] = *b"\r\n\r\n\0\r\nQUIT\n";
 	if source.is_ipv4() != destination.is_ipv4() {

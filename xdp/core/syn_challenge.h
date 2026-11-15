@@ -1,19 +1,25 @@
 #ifndef RAMPART_SYN_CHALLENGE_H
 #define RAMPART_SYN_CHALLENGE_H
 
-// ── Rampart RST-challenge (Oubliette-style liveness proof) ──
-//
-// Protocol-agnostic source verification, compatible with any TCP client:
-//   1. SYN from a source that is neither whitelisted nor verified:
-//      kernel reflects a SYN-ACK with a DELIBERATELY WRONG ack number
-//      (deterministic from the 4-tuple + secret) and drops the original SYN.
-//   2. Spoofed source never reacts — it does not own the address.
-//   3. Live client's TCP stack rejects the unacceptable SYN-ACK
-//      (RFC 9293 SYN-SENT: SEG.ACK outside [ISS+1, SND.NXT] → RST)
-//      echoing secret-derived values. Seeing that RST marks the source
-//      verified; the app reconnects and its next SYN reaches the backend.
-//
-// Pending challenges expire after G_CHALLENGE_TIMEOUT_MS (spoof = silence).
+/**
+ * Rampart RST challenge (Oubliette-style liveness proof).
+ *
+ * Protocol-agnostic source verification that any TCP client can pass:
+ *
+ *   1. A SYN from a source that is neither whitelisted nor verified makes
+ *      the filter reflect a SYN-ACK with a deliberately wrong ack number
+ *      (derived deterministically from the 4-tuple and the secret) and drop
+ *      the original SYN.
+ *   2. A spoofed source never reacts, because it does not own the address.
+ *   3. A live client's TCP stack rejects the unacceptable SYN-ACK
+ *      (RFC 9293 SYN-SENT: a SEG.ACK outside [ISS+1, SND.NXT] triggers a
+ *      RST) and echoes secret-derived values in that RST. Seeing the RST
+ *      marks the source verified; the application reconnects and its next
+ *      SYN reaches the backend.
+ *
+ * Pending challenges expire after G_CHALLENGE_TIMEOUT_MS, so a silent
+ * spoofed source is forgotten instead of accumulating state.
+ */
 
 #include "common.h"
 #include "config.h"
@@ -22,7 +28,13 @@
 
 #define CHAL_CONTINUE (-1) // fall through to the normal filter path
 
-// ── Secret-dependent 64-bit mixing (splitmix-style finalizer) ──
+/**
+ * Secret-dependent 64-bit mixing step (splitmix-style finalizer).
+ *
+ * @param h  running hash
+ * @param v  value to fold in
+ * @return   mixed hash
+ */
 static __always_inline __u64 chal_mix64(__u64 h, __u64 v)
 {
     h ^= v;
@@ -31,7 +43,16 @@ static __always_inline __u64 chal_mix64(__u64 h, __u64 v)
     return h;
 }
 
-// Per-flow challenge values; infeasible to forge without G_CHALLENGE_SECRET
+/**
+ * Derive the per-flow challenge values.
+ *
+ * Both the ISN and the bogus ack come from this hash, so forging a passing
+ * RST is infeasible without G_CHALLENGE_SECRET while the values stay stable
+ * for the same flow.
+ *
+ * @param k  flow key of the connection being challenged
+ * @return   64-bit secret-derived value (high half ISN, low half bad ack)
+ */
 static __always_inline __u64 chal_derive(const struct flow_key *k)
 {
     __u64 h = (__u64)G_CHALLENGE_SECRET ^ 0x5253544348414C53ULL;
@@ -42,7 +63,15 @@ static __always_inline __u64 chal_derive(const struct flow_key *k)
     return h;
 }
 
-// ── Ones-complement helpers (both IPv4/TCP headers are 20 bytes = 10 words) ──
+/**
+ * Sum the ten 16-bit words of a 20-byte header.
+ *
+ * Both the IPv4 and the TCP headers are exactly 20 bytes, so one helper
+ * serves each of them.
+ *
+ * @param w  header viewed as ten 16-bit words
+ * @return   unfolded ones-complement sum
+ */
 static __always_inline __u32 chal_sum10(const __u16 *w)
 {
     __u32 s = 0;
@@ -51,6 +80,12 @@ static __always_inline __u32 chal_sum10(const __u16 *w)
     return s;
 }
 
+/**
+ * Fold an accumulated sum into a ones-complement checksum.
+ *
+ * @param sum  unfolded 32-bit sum of 16-bit words
+ * @return     checksum, already complemented and ready for the header
+ */
 static __always_inline __u16 chal_csum_fold(__u32 sum)
 {
     sum = (sum >> 16) + (sum & 0xFFFF);
@@ -58,17 +93,31 @@ static __always_inline __u16 chal_csum_fold(__u32 sum)
     return (__u16)~sum;
 }
 
-// Rewrite the packet in place into a SYN-ACK: MAC/IP/ports swapped,
-// seq = marker, ack = bad_ack (guaranteed unacceptable for the client),
-// clean 20-byte TCP header, IP checksum recomputed, TCP checksum rebuilt.
-// All reads happen BEFORE any packet write (writes invalidate verifier
-// bounds), the tail is trimmed so the peer sees no leftover option bytes.
+/**
+ * Rewrite the packet in place into a SYN-ACK carrying the challenge.
+ *
+ * MAC addresses and IP addresses are swapped, ports are swapped, seq is set
+ * to marker and ack to bad_ack; a guaranteed-unacceptable ack is what forces
+ * the live client into an RST. The TCP header is rebuilt clean (options
+ * gone), the IPv4 checksum recomputed and the TCP checksum rebuilt over the
+ * pseudo-header. The frame is trimmed so the peer sees no leftover option
+ * bytes from the original SYN.
+ *
+ * @param ctx      XDP context, used to trim the tail
+ * @param eth      Ethernet header of the packet
+ * @param l3       start of the IPv4 or IPv6 header
+ * @param is_ipv6  1 when l3 is an IPv6 header
+ * @param tcp      TCP header of the packet
+ * @param marker   ISN to advertise (our seq)
+ * @param bad_ack  unacceptable ack number to advertise
+ */
 static __always_inline void chal_build_synack(struct xdp_md *ctx,
                                               struct ethhdr *eth, void *l3,
                                               __u8 is_ipv6, struct tcphdr *tcp,
                                               __u32 marker, __u32 bad_ack)
 {
-    // ── Snapshot phase (packet reads) ──
+    // Snapshot phase: every read happens before any write, because a write
+    // invalidates the verifier's bounds knowledge for later reads.
     __u16 ipw[10];
     __u16 tcpw[10];
     __u8 ms[ETH_ALEN], md[ETH_ALEN];
@@ -87,8 +136,8 @@ static __always_inline void chal_build_synack(struct xdp_md *ctx,
         daddr[0] = ((struct iphdr *)l3)->saddr;
     }
 
-    // ── Compute images in registers ──
-    // IPv4 header: swap addresses, fresh TTL, recompute checksum
+    // Compute phase: build both header images in registers.
+    // IPv4: swap addresses, fresh TTL, recompute the checksum.
     if (!is_ipv6) {
         __u16 s0 = ipw[6], s1 = ipw[7];
         ipw[6] = ipw[8];
@@ -106,7 +155,7 @@ static __always_inline void chal_build_synack(struct xdp_md *ctx,
             bpf_htons(sizeof(struct tcphdr));
     }
 
-    // TCP header: swap ports, inject secret-derived seq/ack, SYN|ACK
+    // TCP: swap ports, inject the secret-derived seq/ack and SYN|ACK.
     __u16 nsport = tcpw[1];               // new source = old dest
     __u16 ndport = tcpw[0];               // new dest = old source
     tcpw[0] = nsport;
@@ -122,7 +171,7 @@ static __always_inline void chal_build_synack(struct xdp_md *ctx,
     tcpw[8] = 0;                          // checksum placeholder
     tcpw[9] = 0;                          // urg_ptr
 
-    // TCP checksum over pseudo-header + 20-byte header
+    // TCP checksum over pseudo-header plus the 20-byte header.
     __u32 sum = 0;
     if (is_ipv6) {
         __u16 *w = (__u16 *)saddr;
@@ -137,7 +186,7 @@ static __always_inline void chal_build_synack(struct xdp_md *ctx,
     sum += chal_sum10(tcpw);
     tcpw[8] = chal_csum_fold(sum);
 
-    // ── Write phase ──
+    // Write phase: commit the images built above.
     __builtin_memcpy(eth->h_dest, ms, ETH_ALEN);
     __builtin_memcpy(eth->h_source, md, ETH_ALEN);
     if (is_ipv6) {
@@ -150,16 +199,29 @@ static __always_inline void chal_build_synack(struct xdp_md *ctx,
     }
     __builtin_memcpy(tcp, tcpw, 20);
 
-    // Trim to the bare header (drop SYN options/payload remnants)
+    // Trim to the bare header so SYN options and payload remnants are gone.
     long trim = (long)((void *)(long)ctx->data_end -
                        ((void *)tcp + sizeof(struct tcphdr)));
     if (trim > 0)
         bpf_xdp_adjust_tail(ctx, -trim);
 }
 
-// ── Pure SYN from an unknown source: reflect the wrong SYN-ACK challenge ──
-// Returns CHAL_CONTINUE (verified source — process normally), XDP_TX
-// (challenge sent) or XDP_DROP.
+/**
+ * Handle a bare SYN from a source that may not have proven liveness yet.
+ *
+ * A verified source refreshes its TTL and continues down the normal filter
+ * path. Anything else receives the reflected challenge.
+ *
+ * @param ctx      XDP context
+ * @param eth      Ethernet header
+ * @param l3       start of the IPv4 or IPv6 header
+ * @param is_ipv6  1 when l3 is an IPv6 header
+ * @param tcp      TCP header
+ * @param flow     flow key of this connection
+ * @param now      current bpf_ktime_get_ns() timestamp
+ * @return         CHAL_CONTINUE to process normally, XDP_TX when a challenge
+ *                 was sent, or XDP_DROP on failure
+ */
 static __always_inline int chal_on_syn(struct xdp_md *ctx, struct ethhdr *eth,
                                        void *l3, __u8 is_ipv6,
                                        struct tcphdr *tcp,
@@ -197,9 +259,18 @@ static __always_inline int chal_on_syn(struct xdp_md *ctx, struct ethhdr *eth,
     return XDP_TX;
 }
 
-// ── RST answering a pending challenge: proof of life ──
-// Accept only if the RST echoes a secret-derived value (our bad ack as its
-// seq, or our marker+1 as its ack). Anything else fails the challenge.
+/**
+ * Handle a RST that may answer a pending challenge.
+ *
+ * Only a RST echoing a secret-derived value counts as proof of life: our bad
+ * ack as its seq, or our marker+1 as its ack. Everything else, including a
+ * reply that arrives after the timeout, fails the challenge and is dropped.
+ *
+ * @param tcp   TCP header of the RST
+ * @param flow  flow key of the connection
+ * @param now   current bpf_ktime_get_ns() timestamp
+ * @return      CHAL_CONTINUE when no challenge was pending, otherwise XDP_DROP
+ */
 static __always_inline int chal_on_rst(struct tcphdr *tcp,
                                        const struct flow_key *flow, __u64 now)
 {

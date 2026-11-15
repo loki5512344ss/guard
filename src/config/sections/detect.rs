@@ -1,6 +1,8 @@
+//! Detection sections (`[detect*]`) and the per-protocol handler policy.
+
 use serde::Deserialize;
 
-/// Секция `[detect]`: детекторы распределённых атак.
+/// `[detect]` section: distributed attack detectors.
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct DetectConfig {
 	#[serde(default)]
@@ -11,9 +13,10 @@ pub struct DetectConfig {
 	pub alert: DetectAlertConfig,
 }
 
-/// Секция `[detect.autoban]`: авто-бан источников по репутации и сигналам
-/// детектора атак. Порог сравнивается со скором [`crate::traffic::reputation::IpReputation`],
-/// TTL берётся из `ban.ban_duration_secs`.
+/// `[detect.autoban]` section: auto-ban sources based on reputation and attack
+/// detector signals. The threshold is compared against the
+/// [`crate::traffic::reputation::IpReputation`] score, the TTL comes from
+/// `ban.ban_duration_secs`.
 #[derive(Debug, Clone, Deserialize)]
 pub struct DetectAutobanConfig {
 	#[serde(default)]
@@ -35,15 +38,15 @@ fn default_autoban_reputation_threshold() -> i32 {
 	-50
 }
 
-/// Секция `[detect.alert]`: webhook-алерты на переходах состояния атаки
-/// («атака началась» / «атака закончилась»).
+/// `[detect.alert]` section: webhook alerts on attack state transitions
+/// (attack started, attack ended).
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct DetectAlertConfig {
 	#[serde(default)]
 	pub webhook_url: Option<String>,
 }
 
-/// Секция `[detect.prefix]`: subnet-level детектор распределённых атак.
+/// `[detect.prefix]` section: subnet-level detector for distributed attacks.
 #[derive(Debug, Clone, Deserialize)]
 pub struct DetectPrefixConfig {
 	#[serde(default)]
@@ -77,7 +80,7 @@ fn default_prefix_min_unique_sources() -> u64 {
 	16
 }
 
-/// Секция `[protocol]`: протокольные обработчики (plugin-by-feature).
+/// `[protocol]` section: protocol handlers, enabled one plugin per feature.
 #[cfg(any(feature = "protocol-http", feature = "protocol-minecraft"))]
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct ProtocolConfig {
@@ -89,6 +92,7 @@ pub struct ProtocolConfig {
 	pub minecraft: MinecraftProtocolConfig,
 }
 
+/// `[protocol.minecraft]` section: Minecraft handshake handler policy.
 #[cfg(feature = "protocol-minecraft")]
 #[derive(Debug, Clone, Deserialize)]
 pub struct MinecraftProtocolConfig {
@@ -129,7 +133,7 @@ fn default_minecraft_timeout_secs() -> u64 {
 	5
 }
 
-/// Секция `[protocol.http]`: политика HTTP/1.1-обработчика на edge-ноде.
+/// `[protocol.http]` section: HTTP/1.1 handler policy on the edge node.
 #[cfg(feature = "protocol-http")]
 #[derive(Debug, Clone, Deserialize)]
 pub struct HttpProtocolConfig {

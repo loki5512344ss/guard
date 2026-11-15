@@ -1,6 +1,6 @@
-//! Раскладка ключа `blacklist6_map` (LPM-trie): префикс-длина в байтах 0..4
-//! little-endian + 16 байт адреса в network order (байты 4..20).
-//! Ядро не нужно: проверяется чистая функция кодирования ключа.
+//! Layout of the `blacklist6_map` key (LPM trie): the prefix length as a little-endian
+//! u32 in bytes 0..4 plus the 16-byte address in network order (bytes 4..20).
+//! No kernel needed: this exercises the pure key encoding function.
 #![cfg(feature = "xdp")]
 
 use rampart::xdp::blacklist6_key;
@@ -28,7 +28,7 @@ fn key_layout_for_64_prefix() {
 
 #[test]
 fn leading_zero_address_is_not_confused_with_prefix_len() {
-	// ::1 — 15 нулевых байт перед единицей: ключ не должен «съесть» ни одного.
+	// ::1 has fifteen zero bytes before the final one: the key must not consume any of them.
 	let key = blacklist6_key(128, &[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]);
 
 	assert_eq!(key[0], 128, "prefixlen is not overwritten by the address");

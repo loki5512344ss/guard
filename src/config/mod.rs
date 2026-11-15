@@ -1,4 +1,7 @@
-//! Единый конфиг платформы Rampart.
+//! Single configuration of the Rampart platform.
+//!
+//! Owns the [`Config`] root type, its serde defaults and the semantic validation
+//! that runs before the daemon binds a socket.
 mod sections;
 
 #[cfg(feature = "protocol-http")]
@@ -50,21 +53,21 @@ pub struct Config {
 }
 
 impl Config {
-	/// Парсит конфиг из TOML-строки и валидирует семантику.
+	/// Parses the config from a TOML string and validates its semantics.
 	///
 	/// # Errors
-	/// Возвращает ошибку при невалидном TOML или нарушении инвариантов
-	/// (пустой список upstream-бэкендов, некорректные адреса).
+	/// Fails on invalid TOML or on a violated invariant (empty upstream list,
+	/// malformed addresses, unsafe PROXY protocol settings).
 	pub fn parse_str(contents: &str) -> anyhow::Result<Self> {
 		let config: Config = toml::from_str(contents)?;
 		config.validate()?;
 		Ok(config)
 	}
 
-	/// Читает и парсит конфиг из файла.
+	/// Reads and parses the config from a file.
 	///
 	/// # Errors
-	/// Возвращает ошибку при невозможности прочитать файл или невалидном содержимом.
+	/// Fails when the file cannot be read or its contents are invalid.
 	pub fn from_file(path: &str) -> anyhow::Result<Self> {
 		let contents = fs::read_to_string(path)?;
 		Self::parse_str(&contents)

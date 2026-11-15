@@ -1,4 +1,4 @@
-//! Интеграционные тесты subnet-level детекции: трекер → детектор → вердикты.
+//! Integration tests for subnet-level detection: tracker, detector and verdicts.
 
 use rampart::config::Config;
 use rampart::engine::subnet_tracker::SubnetTracker;
@@ -12,7 +12,7 @@ fn v4(octets: [u8; 4]) -> IpAddr {
 	IpAddr::V4(Ipv4Addr::from(octets))
 }
 
-/// Фиксированный источник снапшотов — имитирует XDP-карту без ядра.
+/// Fixed snapshot source that imitates the XDP map without a kernel.
 struct FixedSource(Vec<(IpAddr, PrefixSnapshot)>);
 
 impl PrefixStatsSource for FixedSource {
@@ -24,8 +24,8 @@ impl PrefixStatsSource for FixedSource {
 #[tokio::test]
 async fn tracker_feeds_detector_and_blocks_distributed_attack() {
 	let tracker = SubnetTracker::new();
-	// 40 уникальных источников из одного /24 — распределённая атака
-	// (6 SYN от каждого: 240 >= 4 × threshold(50)).
+	// 40 unique sources from one /24 is a distributed attack: 6 SYNs each,
+	// i.e. 240 >= 4 x threshold(50).
 	for _ in 0..6 {
 		for last in 1..=40u8 {
 			tracker.record_connection(v4([203, 0, 113, last]));
@@ -41,7 +41,7 @@ async fn tracker_feeds_detector_and_blocks_distributed_attack() {
 	assert_eq!(verdicts[0].snapshot.syn_count, 240);
 	assert_eq!(verdicts[0].snapshot.unique_sources, 40);
 
-	// Полный конвейер через трейт-источник (как в бинарнике).
+	// Full pipeline through the trait source, the way the binary drives it.
 	let source_snaps = FixedSource(snaps).snapshot().await.expect("source snapshot");
 	assert_eq!(detector.evaluate(&source_snaps)[0].verdict, SubnetVerdict::Block);
 }
@@ -49,7 +49,7 @@ async fn tracker_feeds_detector_and_blocks_distributed_attack() {
 #[tokio::test]
 async fn spoof_gate_many_syn_few_sources_no_block() {
 	let tracker = SubnetTracker::new();
-	// 500 SYN всего из 3 адресов — всплеск, но не распределённый.
+	// 500 SYNs from only 3 addresses: a burst, but not distributed.
 	for _ in 0..167 {
 		for ip in [v4([198, 51, 100, 1]), v4([198, 51, 100, 2]), v4([198, 51, 100, 3])] {
 			tracker.record_connection(ip);
@@ -180,7 +180,7 @@ fn escalation_ladder_monitor_to_block() {
 #[test]
 fn spoof_gate_downgrades_block_to_challenge() {
 	let detector = SubnetDetector::new(100, 16);
-	// Много SYN из одного источника (или неизвестное разнообразие) → нет Block.
+	// Many SYNs from one source (or unknown diversity) must not yield Block.
 	let few = PrefixSnapshot {
 		syn_count: 1000,
 		unique_sources: 3,

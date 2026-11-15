@@ -1,7 +1,7 @@
-//! Traffic Intelligence в hot path: репутация → авто-бан → метрики окна.
+//! Traffic Intelligence in the hot path: reputation, auto-ban and window metrics.
 //!
-//! Все вызовы из accept-пути дешёвые (DashMap/атомики), блокирующего
-//! ввода-вывода нет.
+//! Every call reachable from the accept path is cheap (DashMap/atomics) and
+//! performs no blocking I/O.
 
 use crate::config::DetectAutobanConfig;
 use crate::filter::blacklist::Blacklist;
@@ -15,10 +15,10 @@ use std::time::Duration;
 const BAN_REASON_LOW_REPUTATION: &str = "low_reputation";
 const BAN_REASON_ATTACK: &str = "attack_detector";
 
-/// Точка входа Traffic Intelligence для сетевого пути.
+/// Entry point of Traffic Intelligence on the network path.
 ///
-/// События: новое соединение (`on_accept`), завершение обработки соединения
-/// (`on_connection_end`), эскалация детектора атак (`ban_offenders`).
+/// Events: a new connection (`on_accept`), a finished connection
+/// (`on_connection_end`) and attack-detector escalation (`ban_offenders`).
 pub struct TrafficHook {
 	reputation: Arc<IpReputation>,
 	blacklist: Arc<Blacklist>,
@@ -43,13 +43,18 @@ impl TrafficHook {
 		}
 	}
 
-	/// Новое соединение принято accept-loop'ом. Только счётчик окна cps.
+	/// A new connection was accepted by the accept loop.
+	///
+	/// Only bumps the cps window counter; the counter is drained by
+	/// [`Self::take_cps`] once per second.
 	pub fn on_accept(&self) {
 		self.conn_window.fetch_add(1, Ordering::Relaxed);
 	}
 
-	/// Соединение обработано. Если источник попал под rate-limit (репутация
-	/// упала до порога) — авто-бан с TTL из конфига.
+	/// A connection finished processing.
+	///
+	/// If the source was pushed down to the reputation threshold, it is banned
+	/// with the TTL taken from the config.
 	pub fn on_connection_end(&self, ip: IpAddr) {
 		if !self.autoban.enabled || self.blacklist.is_blocked(ip) {
 			return;
@@ -57,8 +62,10 @@ impl TrafficHook {
 		self.autoban_if_toxic(ip, BAN_REASON_LOW_REPUTATION);
 	}
 
-	/// Эскалация детектора атак: бан всех источников ниже порога репутации.
-	/// Вызывается один раз на переход в `UnderAttack`, не на каждый тик.
+	/// Attack-detector escalation: bans every source below the reputation
+	/// threshold and returns how many bans were issued.
+	///
+	/// Called once on the transition into `UnderAttack`, not on every tick.
 	pub fn ban_offenders(&self) -> usize {
 		if !self.autoban.enabled {
 			return 0;
@@ -75,7 +82,7 @@ impl TrafficHook {
 		banned
 	}
 
-	/// Забирает накопленное окно новых соединений за секунду (cps).
+	/// Takes the accumulated one-second window of new connections (cps).
 	pub fn take_cps(&self) -> u64 {
 		self.conn_window.swap(0, Ordering::Relaxed)
 	}
@@ -206,7 +213,7 @@ mod tests {
 				enabled: true,
 				reputation_threshold: -50,
 			},
-			// Короткий TTL как мок времени: бан жив, потом истекает.
+			// Zero TTL as a time mock: the ban must be dead on arrival.
 			0,
 		);
 		let target = ip([10, 3, 0, 1]);

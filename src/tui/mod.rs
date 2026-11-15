@@ -1,7 +1,10 @@
-//! TUI-модуль Rampart: live-метрики edge-ноды/manager в терминале (ratatui).
+//! Rampart TUI: live edge-node and manager metrics in the terminal (ratatui).
 //!
-//! Используется бинарём `rampart-tui`; источник данных — Prometheus
-//! exposition endpoint (`/metrics`).
+//! Owns the terminal front end used by the `rampart-tui` binary; the data
+//! source is the Prometheus exposition endpoint (`/metrics`).
+//!
+//! The fetch task and the render loop communicate only through
+//! [`state::AppState`], so a slow or failing endpoint never blocks the UI.
 
 pub mod app;
 pub mod metrics;

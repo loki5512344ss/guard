@@ -1,9 +1,9 @@
-//! Subnet-level (prefix) детектор распределённых атак.
+//! Subnet-level (prefix) distributed attack detector.
 //!
-//! Источник данных — трейт [`PrefixStatsSource`]: карта XDP `prefix_stats`
-//! (feature `xdp`) либо юзерспейс-агрегатор [`crate::engine::subnet_tracker`].
-//! Контракт с XDP-агентом: [`PrefixKey`] / [`PrefixStatsVal`] должны совпадать
-//! побайтово со структурами ядра.
+//! Data arrives through the [`PrefixStatsSource`] trait: either the XDP
+//! `prefix_stats` map (feature `xdp`) or the user-space aggregator in
+//! [`crate::engine::subnet_tracker`]. [`PrefixKey`] and [`PrefixStatsVal`] must
+//! match the kernel structs byte for byte, hence the `repr(C)` layout.
 
 mod key;
 mod stats;

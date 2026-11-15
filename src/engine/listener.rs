@@ -1,4 +1,4 @@
-//! Multi-worker TCP accept-loop с SO_REUSEPORT и graceful shutdown.
+//! Multi-worker TCP accept loop with `SO_REUSEPORT` and graceful shutdown.
 
 use crate::config::Config;
 use crate::engine::tunnel::Gateway;
@@ -8,11 +8,14 @@ use std::sync::Arc;
 use tokio::net::TcpListener;
 use tokio::sync::watch;
 
-/// Запускает `workers.count` accept-loop'ов на одном адресе.
+/// Starts `workers.count` accept loops on a single address.
+///
+/// Each worker binds its own socket with `SO_REUSEPORT` and `SO_REUSEADDR`, so
+/// the kernel distributes incoming connections across them and a restart does
+/// not fail on `TIME_WAIT` sockets.
 ///
 /// # Errors
-/// Возвращает ошибку при невозможности забиндить адрес или падении одного
-/// из accept-loop'ов.
+/// Fails when the address cannot be bound or when one of the accept loops dies.
 pub async fn run(
 	config: Arc<Config>,
 	gateway: Arc<Gateway>,
@@ -75,7 +78,7 @@ async fn accept_loop(
 				let gateway = Arc::clone(&gateway);
 				let hook = Arc::clone(&hook);
 				tokio::spawn(async move {
-					// Hot path Traffic Intelligence: только атомики и DashMap.
+					// Traffic intelligence hot path: atomics and `DashMap` only.
 					hook.on_accept();
 					let outcome = gateway.handle(stream, peer_addr).await;
 					if let Err(e) = outcome.result {

@@ -1,7 +1,10 @@
+//! Edge sections: bind, backend, workers, limits, ban, PoW and PROXY protocol.
+
 use serde::{Deserialize, Deserializer};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::str::FromStr;
 
+/// `[bind]` section: listen address and port of the edge node.
 #[derive(Debug, Clone, Deserialize)]
 pub struct BindConfig {
 	#[serde(default = "default_bind_address")]
@@ -26,7 +29,7 @@ fn default_bind_port() -> u16 {
 	25565
 }
 
-/// Generic upstream-бэкенды (список addr:port) за edge-нодой.
+/// `[backend]` section: upstream backends (`addr:port`) behind the edge node.
 #[derive(Debug, Clone, Deserialize)]
 pub struct BackendConfig {
 	#[serde(default = "default_upstreams")]
@@ -45,6 +48,7 @@ fn default_upstreams() -> Vec<String> {
 	vec!["127.0.0.1:25566".to_string()]
 }
 
+/// `[workers]` section: number of accept loops sharing the listen address.
 #[derive(Debug, Clone, Deserialize)]
 pub struct WorkerConfig {
 	#[serde(default = "default_worker_count")]
@@ -61,6 +65,7 @@ fn default_worker_count() -> usize {
 	4
 }
 
+/// `[limits]` section: per-IP connection and rate limits.
 #[derive(Debug, Clone, Deserialize)]
 pub struct LimitsConfig {
 	#[serde(default = "default_handshake_timeout")]
@@ -97,6 +102,7 @@ fn default_rate_limit_burst() -> f64 {
 	10.0
 }
 
+/// `[ban]` section: default ban duration.
 #[derive(Debug, Clone, Deserialize)]
 pub struct BanConfig {
 	#[serde(default = "default_ban_duration")]
@@ -115,6 +121,7 @@ fn default_ban_duration() -> u64 {
 	3600
 }
 
+/// `[pow]` section: proof-of-work gate.
 #[derive(Debug, Clone, Deserialize)]
 pub struct PowConfig {
 	#[serde(default)]
@@ -131,7 +138,6 @@ impl Default for PowConfig {
 		}
 	}
 }
-
 fn default_pow_difficulty() -> u8 {
 	4
 }
@@ -144,25 +150,14 @@ pub struct TrustedProxyCidr {
 }
 
 impl TrustedProxyCidr {
+	/// Returns whether `ip` belongs to this network.
 	#[must_use]
 	pub fn contains(&self, ip: IpAddr) -> bool {
+		let mask4 = mask_v4(self.prefix_len);
+		let mask6 = mask_v6(self.prefix_len);
 		match (self.network, ip) {
-			(IpAddr::V4(network), IpAddr::V4(ip)) => {
-				let mask = if self.prefix_len == 0 {
-					0
-				} else {
-					u32::MAX << (32 - self.prefix_len)
-				};
-				u32::from(network) & mask == u32::from(ip) & mask
-			},
-			(IpAddr::V6(network), IpAddr::V6(ip)) => {
-				let mask = if self.prefix_len == 0 {
-					0
-				} else {
-					u128::MAX << (128 - self.prefix_len)
-				};
-				u128::from(network) & mask == u128::from(ip) & mask
-			},
+			(IpAddr::V4(network), IpAddr::V4(ip)) => u32::from(network) & mask4 == u32::from(ip) & mask4,
+			(IpAddr::V6(network), IpAddr::V6(ip)) => u128::from(network) & mask6 == u128::from(ip) & mask6,
 			_ => false,
 		}
 	}
@@ -213,6 +208,7 @@ fn mask_v6(prefix: u8) -> u128 {
 	if prefix == 0 { 0 } else { u128::MAX << (128 - prefix) }
 }
 
+/// `[proxy_protocol]` section: inbound PROXY protocol ingestion.
 #[derive(Debug, Clone, Deserialize)]
 pub struct ProxyProtocolConfig {
 	#[serde(default)]

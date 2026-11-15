@@ -15,6 +15,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 	let dst = out_dir.join("universal_filter.o");
 
 	println!("cargo:rerun-if-changed={}", src.display());
+	// config.h/common.h/etc. live in these dirs: without tracking them a header
+	// edit silently keeps a stale object (and a stale .rodata layout).
+	println!("cargo:rerun-if-changed={}", xdp_dir.join("core").display());
+	println!("cargo:rerun-if-changed={}", xdp_dir.join("hooks").display());
 
 	let host_triple = std::env::var("HOST").unwrap_or_default();
 	let arch = host_triple.split('-').next().unwrap_or(&host_triple);

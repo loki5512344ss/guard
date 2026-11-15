@@ -18,14 +18,14 @@ pub(super) fn interface_cstr(name: &str) -> Result<CString> {
 	CString::new(name).with_context(|| format!("interface name {name:?} contains an interior NUL byte"))
 }
 
-/// Внутренний data-map `.rodata` ищется по суффиксу: libbpf именует его
-/// `<obj_name>.rodata`, а имя объекта при `open_memory` без явного `.name()`
-/// вообще `memory` — точное сравнение ломалось на живом ядре (smoke-тест).
+/// The internal `.rodata` data map is matched by suffix: libbpf names it
+/// `<obj_name>.rodata`, and with `open_memory` and no explicit `.name()` the object is
+/// called `memory` — an exact comparison broke on a live kernel (smoke test).
 pub(super) fn is_rodata_map(name: &str) -> bool {
 	name.ends_with(".rodata")
 }
 
-/// Патчит карту `*.rodata` (volatile const глобалы) ДО загрузки объекта.
+/// Patches the `*.rodata` map (volatile-const globals) before the object is loaded.
 pub(super) fn patch_rodata(open_obj: &mut OpenObject, globals: &XdpGlobals) -> Result<()> {
 	let image = globals.build_rodata_image();
 	if !open_obj
@@ -42,12 +42,23 @@ pub(super) fn patch_rodata(open_obj: &mut OpenObject, globals: &XdpGlobals) -> R
 		.maps_mut()
 		.find(|m| m.name().to_str().is_some_and(is_rodata_map))
 		.context("rodata map vanished between passes")?;
+	// libbpf rejects a value whose size differs from the map's (EINVAL, and the
+	// error message says nothing useful). Fail loudly here instead: a mismatch
+	// means `struct rampart_config` in config.h and `XdpGlobals` drifted apart.
+	let expected = map.value_size() as usize;
+	if image.len() != expected {
+		bail!(
+			"XDP .rodata map expects {expected} bytes, loader image has {} — \
+			 struct rampart_config (xdp/core/config.h) and XdpGlobals (src/xdp/globals.rs) diverged",
+			image.len()
+		);
+	}
 	map.set_initial_value(&image)
 		.with_context(|| format!("failed to set initial value of '{RODATA_MAP_NAME}'"))
 }
 
-/// Честное имя режима attach по `attach_mode` из `bpf_xdp_query_opts`
-/// (kernel `enum xdp_attached_mode`: NONE=0, DRV=1, OFFLOAD=2, SKB=3).
+/// Honest name of the attach mode, derived from the `attach_mode` field of
+/// `bpf_xdp_query_opts` (kernel `enum xdp_attached_mode`: NONE=0, DRV=1, OFFLOAD=2, SKB=3).
 pub(super) fn xdp_attach_mode_name(mode: u8) -> &'static str {
 	match mode {
 		1 => "native (drv)",
@@ -57,13 +68,13 @@ pub(super) fn xdp_attach_mode_name(mode: u8) -> &'static str {
 	}
 }
 
-/// Собирает ringbuf-колбэк для `events_map`.
+/// Builds the ringbuf callback for `events_ringbuf`.
 ///
-/// Колбэк обязан быть `'static`, поэтому всё разделяемое состояние (`Arc<Blacklist>`,
-/// копия `AutoBanConfig`) захватывается `move`-клонами. Когда `blacklist` — `None`
-/// (фича не подключена) или политика выключена, события только парсятся и
-/// логируются структурированно; баны не пишутся. В горячем пути нет `format!` —
-/// `tracing`-поля и `&'static str` причины.
+/// The callback must be `'static`, so all shared state (`Arc<Blacklist>`, a copy of
+/// `AutoBanConfig`) is captured by `move` clones. When `blacklist` is `None` (feature not
+/// wired) or the policy is disabled, events are only parsed and logged in a structured
+/// way; no bans are written. The hot path does no `format!` — only `tracing` fields and
+/// `&'static str` reasons.
 pub(super) fn build_ringbuf(
 	obj: &Object,
 	blacklist: Option<Arc<Blacklist>>,
@@ -71,8 +82,8 @@ pub(super) fn build_ringbuf(
 ) -> Result<RingBuffer<'static>> {
 	let map = obj
 		.maps()
-		.find(|m| m.name() == "events_map")
-		.context("events_map not found")?;
+		.find(|m| m.name() == "events_ringbuf")
+		.context("events_ringbuf not found")?;
 	let mut builder = RingBufferBuilder::new();
 	builder.add(&map, move |data: &[u8]| {
 		let Some(event) = parse_xdp_event(data) else {
@@ -93,10 +104,10 @@ pub(super) fn build_ringbuf(
 		};
 		if let Some(ban) = auto_ban_decision(&event, &cfg) {
 			let addr = IpAddr::V4(ban.ip);
-			// `Blacklist::add` возвращает `()` (DashMap::insert игнорируется), а
-			// править blacklist.rs вне нашей зоны нельзя — поэтому «новый ли бан»
-			// определяем через публичный `is_blocked` ДО перезаписи. Это дедуп
-			// лога/метрики по активному бану, а не по факту вставки.
+			// `Blacklist::add` returns `()` (it ignores `DashMap::insert`) and blacklist.rs is
+			// out of our edit scope, so "is this a new ban" is decided through the public
+			// `is_blocked` before the overwrite. This dedups the log line and the metric by
+			// active ban, not by the fact of insertion.
 			let already_banned = blacklist.is_blocked(addr);
 			blacklist.add(addr, Duration::from_secs(ban.duration_secs), ban.reason);
 			if already_banned {
@@ -134,8 +145,8 @@ mod tests {
 
 	#[test]
 	fn rodata_map_matches_libbpf_naming() {
-		// libbpf строит имя `<obj><section>` без замены точки (libbpf.c ~1911),
-		// при open_memory без name объект называется "memory":
+		// libbpf builds the name as `<obj><section>` without rewriting the dot
+		// (libbpf.c ~1911); with open_memory and no name the object is called "memory":
 		assert!(is_rodata_map("rampart.rodata"));
 		assert!(is_rodata_map("memory.rodata"));
 		assert!(is_rodata_map(".rodata"));

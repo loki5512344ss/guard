@@ -1,3 +1,5 @@
+//! Rampart manager daemon: HTTP API in front of the redis state store.
+
 use axum::{
 	Router,
 	http::HeaderValue,
@@ -18,8 +20,8 @@ async fn main() -> anyhow::Result<()> {
 		.with_env_filter(EnvFilter::from_default_env().add_directive("rampart=info".parse()?))
 		.init();
 
-	// Manager живёт исключительно на redis-хранилище: без фичи стартовать
-	// нечего — fail-fast вместо полумёртвого API (features additive, TODO SOLID D).
+	// The manager lives exclusively on the redis store: without the feature there
+	// is nothing to start, so fail fast instead of serving a half-dead API.
 	if !cfg!(feature = "store-redis") {
 		anyhow::bail!("rampart-manager requires a redis state store: built without store-redis feature");
 	}
@@ -61,8 +63,8 @@ async fn main() -> anyhow::Result<()> {
 		.route("/api/v1/health", get(api::inventory::health::health_check))
 		.route("/api/v1/auth/login", post(api::auth::login));
 
-	// Redis-зависимые маршруты существуют только вместе с фичей; сам manager
-	// без неё bail'ит выше, поэтому 501-заглушки были бы недостижимым кодом.
+	// Redis-backed routes only exist together with the feature; the manager bails
+	// out above without it, so 501 stubs here would be unreachable code.
 	let protected = Router::new();
 	#[cfg(feature = "store-redis")]
 	let protected = protected

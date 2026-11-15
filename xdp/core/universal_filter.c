@@ -1,17 +1,20 @@
-// ── Rampart Universal XDP Filter ──
-// Protocol-agnostic L3/L4 filter with an L7 extension point.
-//
-// Responsibilities (L3/L4):
-//   1. No pure ACK drop (prevents TCP handshake deadlock)
-//   2. LRU conntrack: SYN_RECEIVED → ESTABLISHED, seq tracking
-//   3. RST/FIN removes conntrack entry (no stale state)
-//   4. IPv6 support alongside IPv4
-//   5. IP/CIDR blacklist + whitelist (LPM_TRIE)
-//   6. SYN throttle per-IP, invalid TCP flag combos dropped
-//   7. UDP policy from config.h: pass / drop / rate-limit
-//
-// Deep payload inspection is delegated to an optional protocol hook:
-//   see ../hooks/hook_api.h. Without a hook, established connections pass.
+/**
+ * Rampart universal XDP filter.
+ *
+ * Protocol-agnostic L3/L4 filter with an optional L7 extension point. It
+ * owns, in this order:
+ *
+ *   1. No pure-ACK drop (prevents TCP handshake deadlock).
+ *   2. LRU conntrack: SYN_RECEIVED to ESTABLISHED, with sequence tracking.
+ *   3. RST/FIN removes the conntrack entry, so no stale state survives.
+ *   4. IPv6 support alongside IPv4.
+ *   5. IP/CIDR blacklist and whitelist (LPM trie).
+ *   6. Per-IP SYN throttle, with invalid TCP flag combinations dropped.
+ *   7. UDP policy from config.h: pass, drop or rate-limit.
+ *
+ * Deep payload inspection is delegated to an optional protocol hook (see
+ * ../hooks/hook_api.h). Without a hook, established connections pass.
+ */
 
 #include <linux/bpf.h>
 #include <linux/if_ether.h>
@@ -32,8 +35,15 @@
 
 char __license[] SEC("license") = "GPL";
 
-// ── TCP flag check (drop malicious combos) ──
-// Returns 1 if packet should be dropped
+/**
+ * Reject TCP flag combinations that no real stack emits.
+ *
+ * Every rule here is a signature of forged or scanner traffic, so a match
+ * means the packet can be dropped before it reaches any stateful logic.
+ *
+ * @param tcp  TCP header of the packet
+ * @return     1 when the packet must be dropped, 0 when it looks legitimate
+ */
 static __always_inline __u8 detect_tcp_bypass(struct tcphdr *tcp)
 {
     __u8 flags = *((__u8 *)tcp + 13);
@@ -59,7 +69,13 @@ static __always_inline __u8 detect_tcp_bypass(struct tcphdr *tcp)
     return 0;
 }
 
-// ── Blacklist lookup with expiry; removes expired entries ──
+/**
+ * Check the IPv4 blacklist and expire the entry on the way out.
+ *
+ * @param src_ip  source address, network byte order
+ * @param now     current bpf_ktime_get_ns() timestamp
+ * @return        1 when the source is currently banned, 0 otherwise
+ */
 static __always_inline __u8 is_blacklisted(__u32 src_ip, __u64 now)
 {
     struct lpm_key key = { .prefixlen = 32, .ip = src_ip };
@@ -72,8 +88,16 @@ static __always_inline __u8 is_blacklisted(__u32 src_ip, __u64 now)
     return 0;
 }
 
-// ── IPv6 blacklist lookup with expiry; removes expired entries ──
-// Key layout mirrors bpf_lpm_trie_key: prefixlen (host order) + 16 addr bytes.
+/**
+ * Check the IPv6 blacklist and expire the entry on the way out.
+ *
+ * Key layout mirrors bpf_lpm_trie_key: prefixlen in host order followed by
+ * 16 address bytes.
+ *
+ * @param addr  16-byte source address, network byte order
+ * @param now   current bpf_ktime_get_ns() timestamp
+ * @return      1 when the source is currently banned, 0 otherwise
+ */
 static __always_inline __u8 is_blacklisted6(const __u8 addr[16], __u64 now)
 {
     struct lpm_key6 key = {};
@@ -88,14 +112,32 @@ static __always_inline __u8 is_blacklisted6(const __u8 addr[16], __u64 now)
     return 0;
 }
 
+/**
+ * Add a /32 ban for one source address.
+ *
+ * @param src_ip  source address, network byte order
+ * @param until   expiry as a bpf_ktime_get_ns() timestamp
+ */
 static __always_inline void ban_ip(__u32 src_ip, __u64 until)
 {
     struct lpm_key key = { .prefixlen = 32, .ip = src_ip };
     bpf_map_update_elem(&blacklist_map, &key, &until, BPF_ANY);
 }
 
-// ── Generic per-IP window throttle (shared by SYN throttle and UDP RL) ──
-// map: LRU_HASH keyed by src_ip; returns 1 if limit exceeded (caller bans/drops)
+/**
+ * Fixed-window throttle for one IPv4 source address.
+ *
+ * Shared by the SYN throttle and the UDP rate limiter; only the map, the
+ * threshold and the window length differ. The caller decides the verdict,
+ * which is why an exceeded limit returns 1 instead of dropping.
+ *
+ * @param map        LRU hash map keyed by src_ip
+ * @param src_ip     source address, network byte order
+ * @param max_hits   packets allowed per window
+ * @param window_ns  window length in nanoseconds
+ * @param now        current bpf_ktime_get_ns() timestamp
+ * @return           1 when the limit is exceeded, 0 when within it
+ */
 static __always_inline __u8 throttle_hit(void *map, __u32 src_ip,
                                          __u32 max_hits, __u64 window_ns,
                                          __u64 now)
@@ -118,9 +160,51 @@ static __always_inline __u8 throttle_hit(void *map, __u32 src_ip,
     return 0;
 }
 
-// ══════════════════════════════════════════
-// Main XDP entry point
-// ══════════════════════════════════════════
+/**
+ * IPv6 twin of throttle_hit().
+ *
+ * Identical window logic; only the key width differs, so the caller passes a
+ * pointer to the 16-byte source address (the map key is struct in6_addr).
+ *
+ * @param map        LRU hash map keyed by the source address
+ * @param key        pointer to the 16-byte source address
+ * @param max_hits   packets allowed per window
+ * @param window_ns  window length in nanoseconds
+ * @param now        current bpf_ktime_get_ns() timestamp
+ * @return           1 when the limit is exceeded, 0 when within it
+ */
+static __always_inline __u8 throttle_hit6(void *map, const void *key,
+                                          __u32 max_hits, __u64 window_ns,
+                                          __u64 now)
+{
+    struct throttle_entry *th = bpf_map_lookup_elem(map, key);
+
+    if (th) {
+        if (now - th->window_start < window_ns) {
+            if (th->hits >= max_hits)
+                return 1;
+            __sync_fetch_and_add(&th->hits, 1);
+        } else {
+            th->window_start = now;
+            th->hits = 1;
+        }
+    } else {
+        struct throttle_entry new_th = { .window_start = now, .hits = 1 };
+        bpf_map_update_elem(map, key, &new_th, BPF_ANY);
+    }
+    return 0;
+}
+
+/**
+ * Main XDP entry point.
+ *
+ * Parses L2/L3/L4, applies whitelist and blacklist, then dispatches to the
+ * UDP policy or the TCP state machine. A return of XDP_PASS means the packet
+ * continues to the kernel stack; XDP_DROP means it is discarded here.
+ *
+ * @param ctx  XDP context for the received frame
+ * @return     the XDP verdict for this packet
+ */
 SEC("xdp")
 int rampart_universal_filter(struct xdp_md *ctx)
 {
@@ -129,7 +213,7 @@ int rampart_universal_filter(struct xdp_md *ctx)
 
     inc_total();
 
-    // ── Parse Ethernet header ──
+    // Parse the Ethernet header.
     struct ethhdr *eth = data;
     if ((void *)(eth + 1) > data_end)
         return XDP_PASS;
@@ -138,7 +222,7 @@ int rampart_universal_filter(struct xdp_md *ctx)
     if (eth->h_proto != bpf_htons(ETH_P_IP) && eth->h_proto != bpf_htons(ETH_P_IPV6))
         return XDP_PASS;
 
-    // ── Parse IP header ──
+    // Parse the IP header.
     __u32 src_ip = 0;
     __u32 dst_ip = 0;
     __u8 l4_proto = 0;
@@ -182,14 +266,16 @@ int rampart_universal_filter(struct xdp_md *ctx)
             ip6->daddr.in6_u.u6_addr32[0] != 0 ||
             ip6->daddr.in6_u.u6_addr32[1] != 0 ||
             ip6->daddr.in6_u.u6_addr32[2] != bpf_htonl(0xFFFF)) {
-            // Native IPv6 — no 32-bit representable address, handled separately
-            // after the generic L4/port gates; must NOT touch v4 maps.
+            // Native IPv6: no 32-bit representable address, handled
+            // separately after the generic L4/port gates and must never
+            // touch the IPv4 maps.
             native_v6 = 1;
             is_ipv6   = 1;
             l4_proto  = ip6->nexthdr;
             __builtin_memcpy(src6, &ip6->saddr, 16);
         } else {
-            // FIX: source address must come from saddr, never daddr
+            // Source address must come from saddr, never daddr, or the
+            // filter would track the server instead of the client.
             src_ip   = ip6->saddr.in6_u.u6_addr32[3];
             dst_ip   = ip6->daddr.in6_u.u6_addr32[3];
             l4_proto = ip6->nexthdr;
@@ -197,7 +283,7 @@ int rampart_universal_filter(struct xdp_md *ctx)
         }
     }
 
-    // ── Parse L4 header ──
+    // Parse the L4 header.
     __u8 ip_hdr_len;
     void *l4;
 
@@ -220,7 +306,7 @@ int rampart_universal_filter(struct xdp_md *ctx)
     if ((void *)l4 + min_l4 > data_end)
         return XDP_PASS;
 
-    // ── Port range check (protected services) ──
+    // Port range check: out-of-range destinations are not ours to defend.
     __u16 dst_port;
     if (l4_proto == IPPROTO_TCP)
         dst_port = bpf_ntohs(((struct tcphdr *)l4)->dest);
@@ -237,7 +323,7 @@ int rampart_universal_filter(struct xdp_md *ctx)
 
     __u64 now = bpf_ktime_get_ns();
 
-    // ── Native IPv6: blacklist + cheap L4 policy (no stateful v6 yet) ──
+    // Native IPv6: blacklist plus cheap L4 policy (no stateful v6 yet).
     if (native_v6) {
         if (is_blacklisted6(src6, now)) {
             inc_blacklist();
@@ -245,12 +331,23 @@ int rampart_universal_filter(struct xdp_md *ctx)
             return XDP_DROP;
         }
         if (l4_proto == IPPROTO_UDP) {
-            if (G_UDP_POLICY == 1) { // drop
+            switch (G_UDP_POLICY) {
+            case 1: // drop
                 inc_drop();
                 return XDP_DROP;
+            case 2: // rate-limit (per-source, 128-bit key)
+                if (throttle_hit6(&udp_rate_limit6, src6,
+                                  G_UDP_HIT_COUNT, G_UDP_WINDOW_NS, now)) {
+                    inc_rate_limit();
+                    inc_drop();
+                    // No ringbuf event: xdp_event.src_ip is u32 (ABI).
+                    return XDP_DROP;
+                }
+                /* fallthrough: within limits — pass */
+            default: // pass
+                inc_pass();
+                return XDP_PASS;
             }
-            inc_pass();
-            return XDP_PASS; // policy 2 (rate-limit) needs a 128-bit key — not supported for v6
         }
         // TCP: forged-flag combos are L4-generic, no state needed
         if (detect_tcp_bypass((struct tcphdr *)l4)) {
@@ -266,14 +363,14 @@ int rampart_universal_filter(struct xdp_md *ctx)
         return XDP_PASS;
     }
 
-    // ── Whitelist check (CIDR) — before any filtering ──
+    // Whitelist check (CIDR), before any filtering.
     struct lpm_key wl_key = { .prefixlen = 32, .ip = src_ip };
     if (bpf_map_lookup_elem(&whitelist_map, &wl_key)) {
         inc_whitelist();
         return XDP_PASS;
     }
 
-    // ── Blacklist check (CIDR with expiry) ──
+    // Blacklist check (CIDR with expiry).
     if (is_blacklisted(src_ip, now)) {
         inc_blacklist();
         inc_drop();
@@ -282,7 +379,7 @@ int rampart_universal_filter(struct xdp_md *ctx)
         return XDP_DROP;
     }
 
-    // ═══════════ UDP path ═══════════
+    // UDP path.
     if (l4_proto == IPPROTO_UDP) {
         switch (G_UDP_POLICY) {
         case 1: // drop
@@ -306,7 +403,7 @@ int rampart_universal_filter(struct xdp_md *ctx)
         }
     }
 
-    // ═══════════ TCP path ═══════════
+    // TCP path.
     struct tcphdr *tcp = l4;
 
     // Malicious TCP flags
@@ -324,7 +421,7 @@ int rampart_universal_filter(struct xdp_md *ctx)
     if ((void *)data + sizeof(struct ethhdr) + ip_hdr_len + tcp_hdr_len > data_end)
         return XDP_DROP;
 
-    // ── Per-prefix stats key (/24; built once, after blacklist/bypass drops) ──
+    // Per-prefix stats key (/24), built once after blacklist and bypass drops.
     struct prefix_key pkey;
     prefix_key_from_v4(&pkey, src_ip);
 
@@ -335,7 +432,7 @@ int rampart_universal_filter(struct xdp_md *ctx)
     if (tcp_payload_len < 0)
         tcp_payload_len = 0;
 
-    // ── Build flow key ──
+    // Build the flow key.
     struct flow_key flow = {
         .src_ip   = src_ip,
         .dst_ip   = dst_ip,
@@ -343,7 +440,7 @@ int rampart_universal_filter(struct xdp_md *ctx)
         .dst_port = tcp->dest,
     };
 
-    // ── SYN handling (new connection) ──
+    // SYN handling: a bare SYN opens a new connection.
     if (tcp->syn && !tcp->ack) {
         // SYN throttle per-IP
         if (G_FEATURE_SYN_THROTTLE &&
@@ -357,8 +454,9 @@ int rampart_universal_filter(struct xdp_md *ctx)
             return XDP_DROP;
         }
 
-        // ── RST-challenge: unverified source must prove liveness first ──
-        // (after throttle/blacklist, mirroring prefix_stats ordering)
+        // RST challenge: an unverified source must prove liveness first.
+        // Placed after throttle and blacklist so abusive sources never get a
+        // reply, mirroring the prefix_stats ordering.
         if (G_SYN_CHALLENGE_ENABLED) {
             int cv = chal_on_syn(ctx, eth, (void *)(eth + 1), is_ipv6,
                                  tcp, &flow, now);
@@ -387,11 +485,12 @@ int rampart_universal_filter(struct xdp_md *ctx)
         return XDP_PASS; // Let SYN through
     }
 
-    // ── Connection tracking lookup ──
+    // Connection tracking lookup.
     // pkt_count: all non-SYN TCP that survived blacklist/bypass/throttle
     update_prefix_stats(&pkey, 0, now);
 
-    // ── RST-challenge proof: match a pending challenge before conntrack ──
+    // RST challenge proof: match a pending challenge before conntrack,
+    // because the RST answers a flow that was never tracked.
     if (G_SYN_CHALLENGE_ENABLED && tcp->rst) {
         int cv = chal_on_rst(tcp, &flow, now);
         if (cv != CHAL_CONTINUE)
@@ -413,7 +512,7 @@ int rampart_universal_filter(struct xdp_md *ctx)
         return XDP_PASS;
     }
 
-    // ── Sequence number tracking (established connections only) ──
+    // Sequence number tracking, established connections only.
     __u32 seq = bpf_ntohl(tcp->seq);
     if (conn->state == STATE_ESTABLISHED && tcp_payload_len > 0 &&
         seq != conn->expected_seq) {
@@ -430,7 +529,7 @@ int rampart_universal_filter(struct xdp_md *ctx)
         return XDP_PASS;
     }
 
-    // ── State machine ──
+    // State machine.
     if (conn->state == STATE_SYN_RECEIVED) {
         // Expecting the ACK that completes the 3-way handshake
         if (!tcp->ack || seq != conn->expected_seq) {

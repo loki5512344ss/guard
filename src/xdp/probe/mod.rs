@@ -1,4 +1,4 @@
-//! Зондирование XDP-окружения: диагностика, статистика и метрики.
+//! XDP environment probing: diagnostics, statistics and metrics.
 
 mod diagnostics;
 #[cfg(feature = "xdp")]

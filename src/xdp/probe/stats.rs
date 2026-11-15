@@ -1,4 +1,4 @@
-/// Счётчики XDP-программы; индексы соответствуют STAT_* из xdp/core/maps.h.
+/// XDP program counters; the indices follow `STAT_*` from `xdp/core/maps.h`.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct XdpStats {
 	pub total: u64,

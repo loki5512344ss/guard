@@ -1,12 +1,13 @@
-//! Минималистичный парсер текстового формата Prometheus (version=0.0.4).
+//! Minimal parser for the Prometheus text exposition format (version 0.0.4).
 //!
-//! Поддерживает: комментарии (`# HELP`, `# TYPE`, `#`), строки вида
-//! `metric{label="value",...} value [timestamp]` и `metric value [timestamp]`.
-//! Значения `NaN`/`+Inf`/`-Inf` парсятся штатно через `f64::from_str`.
+//! Owns the parsing rules for `/metrics` bodies. Accepts comment lines
+//! (`# HELP`, `# TYPE`, `#`), `metric{label="value",...} value [timestamp]` and
+//! `metric value [timestamp]`. `NaN`/`+Inf`/`-Inf` are parsed through
+//! `f64::from_str`.
 
 use std::collections::BTreeMap;
 
-/// Один сэмпл из exposition-формата Prometheus.
+/// One sample from the Prometheus exposition format.
 #[derive(Debug, Clone, PartialEq)]
 pub struct MetricSample {
 	pub name: String,
@@ -14,21 +15,23 @@ pub struct MetricSample {
 	pub value: f64,
 }
 
-/// Набор сэмплов одного ответа `/metrics`.
+/// All samples of a single `/metrics` response.
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct MetricSet {
 	samples: Vec<MetricSample>,
 }
 
 impl MetricSet {
-	/// Сумма значений всех серий с данным именем (для counter/gauge vec).
-	/// Отсутствующая метрика даёт `0.0`.
+	/// Sums the values of every series with this name (for counter/gauge vecs).
+	///
+	/// A missing metric yields `0.0`.
 	#[must_use]
 	pub fn sum(&self, name: &str) -> f64 {
 		self.samples.iter().filter(|s| s.name == name).map(|s| s.value).sum()
 	}
 
-	/// Значение серии с именем и одной меткой; `None`, если не найдено.
+	/// Value of the series with this name carrying `label == value`, or `None`
+	/// when no such series exists.
 	#[must_use]
 	pub fn labeled(&self, name: &str, label: &str, value: &str) -> Option<f64> {
 		self.samples
@@ -37,17 +40,17 @@ impl MetricSet {
 			.map(|s| s.value)
 	}
 
-	/// Все сэмплы (для тестов и отладки).
+	/// All samples (for tests and debugging).
 	#[must_use]
 	pub fn samples(&self) -> &[MetricSample] {
 		&self.samples
 	}
 }
 
-/// Парсит тело ответа `/metrics`.
+/// Parses a `/metrics` response body.
 ///
-/// Строки с ошибкой формата пропускаются (exposition-поток может быть частично
-/// повреждён — TUI не должен падать на этом).
+/// Lines with a malformed format are skipped: an exposition stream may be
+/// partially corrupted and the TUI must not die because of it.
 #[must_use]
 pub fn parse(input: &str) -> MetricSet {
 	let mut samples = Vec::new();
@@ -64,18 +67,18 @@ fn parse_line(line: &str) -> Option<MetricSample> {
 	if line.is_empty() || line.starts_with('#') {
 		return None;
 	}
-	// Формат: metric[{labels}] value [timestamp]; значения меток могут
-	// содержать пробелы, поэтому голову отрезаем с учётом кавычек.
+	// Format: metric[{labels}] value [timestamp]. Label values may contain
+	// spaces, so the head has to be cut with quote awareness.
 	let (head, rest) = split_head_and_rest(line);
 	let value_str = rest.split_whitespace().next()?;
-	// Timestamp после value игнорируем.
+	// A timestamp after the value is irrelevant for the TUI and dropped.
 
 	let (name, labels) = split_metric(head)?;
 	let value = parse_value(value_str)?;
 	Some(MetricSample { name, labels, value })
 }
 
-/// Отделяет `metric{...}` от хвоста `value [timestamp]`.
+/// Splits `metric{...}` from the trailing `value [timestamp]`.
 fn split_head_and_rest(line: &str) -> (&str, &str) {
 	let Some(open) = line.find('{') else {
 		return match line.find(char::is_whitespace) {
@@ -92,7 +95,7 @@ fn split_head_and_rest(line: &str) -> (&str, &str) {
 	}
 }
 
-/// Индекс `}` вне кавычек, начиная с позиции `from`.
+/// Index of the `}` outside quotes, starting at `from`.
 fn find_closing_brace(line: &str, from: usize) -> Option<usize> {
 	let mut in_quotes = false;
 	let mut escaped = false;
@@ -138,7 +141,7 @@ fn parse_labels(inner: &str) -> BTreeMap<String, String> {
 	labels
 }
 
-/// Разбивает `a="1", b="2"` по запятым вне кавычек.
+/// Splits `a="1", b="2"` on commas outside quotes.
 fn split_label_pairs(inner: &str) -> Vec<&str> {
 	let mut parts = Vec::new();
 	let mut in_quotes = false;

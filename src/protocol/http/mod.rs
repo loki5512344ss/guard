@@ -1,9 +1,12 @@
 //! HTTP/1.1 protocol handler (feature `protocol-http`).
 //!
-//! Первый plugin-реализаций [`ProtocolHandler`]: читает request-head
-//! постепенно (TCP приходит фрагментами), проверяет его по политике из
-//! секции `[protocol.http]` и возвращает upstream для туннелирования.
-//! Прочитанная голова передаётся upstream как начальные байты туннеля.
+//! Owns the first plugin implementation of [`ProtocolHandler`]: it reads the
+//! request head incrementally (TCP arrives in fragments), evaluates it against
+//! the policy from the `[protocol.http]` section and returns the upstream to
+//! tunnel to.
+//!
+//! The bytes already consumed for the head are forwarded to the upstream as the
+//! initial tunnel payload, so the request is not lost.
 
 mod parser;
 
@@ -15,7 +18,7 @@ use std::time::Duration;
 use tokio::io::AsyncReadExt;
 use tokio::net::TcpStream;
 
-/// Обработчик HTTP/1.1: verdict Allow → tunnel на upstream, Reject → drop.
+/// HTTP/1.1 handler: verdict `Allow` tunnels to the upstream, `Reject` drops.
 pub struct HttpProtocolHandler {
 	policy: parser::Policy,
 	timeout: Duration,
@@ -23,7 +26,10 @@ pub struct HttpProtocolHandler {
 }
 
 impl HttpProtocolHandler {
-	/// Собирает обработчик из конфига `[protocol.http]` и списка upstream'ов.
+	/// Builds the handler from the `[protocol.http]` config and the upstream list.
+	///
+	/// The first upstream wins; falling back to `127.0.0.1:80` keeps the handler
+	/// usable in tests where the list is empty.
 	#[must_use]
 	pub fn new(http: &HttpProtocolConfig, upstreams: &[String]) -> Self {
 		Self {
@@ -37,10 +43,11 @@ impl HttpProtocolHandler {
 		}
 	}
 
-	/// Накапливает request-head без повторного чтения одного и того же префикса.
+	/// Accumulates the request head without re-reading an already scanned prefix.
 	///
 	/// # Errors
-	/// Таймаут, закрытие клиента, превышение `max_header_bytes` или ошибка I/O.
+	/// Times out, the client closes, `max_header_bytes` is exceeded, or the
+	/// socket reports an I/O error.
 	async fn read_head(&self, stream: &mut TcpStream) -> anyhow::Result<Vec<u8>> {
 		let limit = self.policy.max_header_bytes;
 		if limit == 0 {

@@ -33,7 +33,10 @@ impl IpReputation {
 		self.scores.get(&ip).map(|v| *v).unwrap_or(0)
 	}
 
-	/// Возвращает источники со скором не выше `threshold` (нарушители).
+	/// Returns the sources scored at or below `threshold` (the offenders).
+	///
+	/// The result is a snapshot copy, so it is safe to ban from it while other
+	/// threads keep recording events.
 	pub fn offenders_below(&self, threshold: i32) -> Vec<IpAddr> {
 		self.scores
 			.iter()

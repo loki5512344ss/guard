@@ -1,11 +1,11 @@
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
-/// `family` для IPv4-префиксов (/24).
+/// `family` tag for IPv4 prefixes (/24).
 pub const PREFIX_FAMILY_V4: u8 = 4;
-/// `family` для IPv6-префиксов (/64).
+/// `family` tag for IPv6 prefixes (/64).
 pub const PREFIX_FAMILY_V6: u8 = 6;
 
-/// Ключ карты `prefix_stats` (`BPF_MAP_TYPE_LRU_HASH`, max_entries 65536).
+/// Key of the `prefix_stats` map (`BPF_MAP_TYPE_LRU_HASH`, 65536 entries).
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct PrefixKey {
@@ -15,7 +15,8 @@ pub struct PrefixKey {
 }
 
 impl PrefixKey {
-	/// Строит ключ префикса для адреса (v4 → /24 в первых 4 байтах, v6 → /64).
+	/// Builds the prefix key for an address (v4 maps to /24 in the first four
+	/// bytes, v6 maps to /64).
 	#[must_use]
 	pub fn new(ip: IpAddr) -> Self {
 		let mut key = Self::default();
@@ -32,7 +33,7 @@ impl PrefixKey {
 		key
 	}
 
-	/// Префикс как IP-адрес (маскированный).
+	/// The prefix as a masked IP address; `None` for an unknown `family` tag.
 	#[must_use]
 	pub fn to_prefix(self) -> Option<IpAddr> {
 		match self.family {
@@ -66,13 +67,14 @@ impl PrefixKey {
 	}
 }
 
-/// Возвращает префикс адреса: IPv4 и IPv4-mapped → /24, IPv6 → /64.
+/// Returns the prefix of an address: IPv4 and IPv4-mapped share /24, IPv6 uses /64.
 #[must_use]
 pub fn prefix_of(ip: IpAddr) -> IpAddr {
 	match ip {
 		IpAddr::V4(v4) => IpAddr::V4(masked_v4(v4)),
 		IpAddr::V6(v6) => match v6.to_ipv4_mapped() {
-			// ::ffff:a.b.c.d живёт в том же /24-пространстве, что и a.b.c.d.
+			// ::ffff:a.b.c.d must land in the same /24 bucket as a.b.c.d,
+			// otherwise a dual-stack client could escape its own ban.
 			Some(v4) => IpAddr::V4(masked_v4(v4)),
 			None => IpAddr::V6(Ipv6Addr::from(masked_v6_segments(v6))),
 		},

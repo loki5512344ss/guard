@@ -1,7 +1,9 @@
-//! Юзерспейс-агрегатор новых соединений по префиксам (/24, /64).
+//! Userspace aggregator of new connections per prefix (/24 for IPv4, /64 for
+//! IPv6).
 //!
-//! Fallback-путь subnet-детектора, когда XDP выключен: питает
-//! [`crate::traffic::prefix::SubnetDetector`] теми же снапшотами.
+//! Fallback path of the subnet detector when XDP is disabled: it feeds
+//! [`crate::traffic::prefix::SubnetDetector`] with the same snapshot shape the
+//! kernel map produces.
 
 use crate::traffic::prefix::{PrefixSnapshot, PrefixStatsSource, prefix_of};
 use dashmap::DashMap;
@@ -15,8 +17,10 @@ struct WindowState {
 	started: Instant,
 }
 
-/// Агрегатор новых соединений по префиксам. `take_snapshot` дренирует
-/// накопленное: каждый вызов закрывает одно окно детекции.
+/// Aggregates new connections per prefix.
+///
+/// `take_snapshot` drains the accumulated state, so every call closes exactly
+/// one detection window.
 pub struct SubnetTracker {
 	windows: DashMap<IpAddr, WindowState>,
 }
@@ -35,7 +39,7 @@ impl SubnetTracker {
 		}
 	}
 
-	/// Регистрирует новое входящее соединение (юзерспейс-аналог SYN).
+	/// Records a new inbound connection (userspace equivalent of a SYN).
 	pub fn record_connection(&self, ip: IpAddr) {
 		let prefix = prefix_of(ip);
 		let mut state = self.windows.entry(prefix).or_insert_with(|| WindowState {
@@ -47,12 +51,12 @@ impl SubnetTracker {
 		state.sources.insert(ip);
 	}
 
-	/// Забирает и сбрасывает агрегаты текущего окна.
+	/// Takes and resets the aggregates of the current window.
 	#[must_use]
 	pub fn take_snapshot(&self) -> Vec<(IpAddr, PrefixSnapshot)> {
 		let mut out = Vec::new();
-		// Дренируем все ключи: каждое окно начинается с чистой карты,
-		// память не растёт при спуфинге множества префиксов.
+		// Drain every key: the next window starts from an empty map, so memory does not
+		// grow when an attacker spoofs many distinct prefixes.
 		self.windows.retain(|prefix, state| {
 			if state.syn_count == 0 {
 				return false;
@@ -60,8 +64,8 @@ impl SubnetTracker {
 			out.push((
 				*prefix,
 				PrefixSnapshot {
-					// Юзерспейс видит только установленные соединения;
-					// pkt_count отражает тот же поток.
+					// Userspace only sees established connections, so `pkt_count` mirrors the same
+					// flow as `syn_count`.
 					pkt_count: state.syn_count,
 					syn_count: state.syn_count,
 					last_seen_ns: state.started.elapsed().as_nanos() as u64,
@@ -74,7 +78,7 @@ impl SubnetTracker {
 	}
 }
 
-/// Адаптер [`SubnetTracker`] под трейт [`PrefixStatsSource`].
+/// Adapts [`SubnetTracker`] to the [`PrefixStatsSource`] trait.
 pub struct TrackerSource {
 	pub tracker: Arc<SubnetTracker>,
 }

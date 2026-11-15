@@ -1,5 +1,8 @@
+//! Platform sections: store backends, XDP, logging and metrics.
+
 use serde::Deserialize;
 
+/// `[store]` section: redis and ClickHouse backends.
 #[derive(Debug, Clone, Deserialize)]
 pub struct StoreConfig {
 	pub redis_url: Option<String>,
@@ -22,6 +25,7 @@ fn default_blacklist_cache_ttl() -> u64 {
 	300
 }
 
+/// `[xdp]` section: kernel-side filter configuration and auto-ban policy.
 #[derive(Debug, Clone, Deserialize)]
 pub struct XdpConfig {
 	#[serde(default)]
@@ -32,7 +36,7 @@ pub struct XdpConfig {
 	pub protected_port_start: u16,
 	#[serde(default = "default_xdp_port_end")]
 	pub protected_port_end: u16,
-	/// "pass" | "drop" | "rate-limit" → G_UDP_POLICY.
+	/// UDP policy: "pass", "drop" or "rate-limit", mapped to `G_UDP_POLICY`.
 	#[serde(default = "default_xdp_udp_policy")]
 	pub udp_policy: String,
 	#[serde(default = "default_xdp_udp_hit_count")]
@@ -41,7 +45,8 @@ pub struct XdpConfig {
 	pub udp_rate_window_ms: u64,
 	#[serde(default)]
 	pub syn_challenge_enabled: bool,
-	/// 128-битный hex (16 символов) для G_CHALLENGE_SECRET; None = плейсхолдер из config.h.
+	/// 128-bit hex (16 characters) for `G_CHALLENGE_SECRET`; `None` keeps the
+	/// placeholder from `config.h`.
 	#[serde(default)]
 	pub challenge_secret_hex: Option<String>,
 	#[serde(default = "default_xdp_challenge_timeout_ms")]
@@ -50,14 +55,15 @@ pub struct XdpConfig {
 	pub throttle_enabled: bool,
 	#[serde(default = "default_xdp_events_enabled")]
 	pub events_enabled: bool,
-	/// OPT-IN: авто-бан по ringbuf-событиям XDP. По умолчанию выключен
-	/// («по умолчанию безопасно»): без него события только логируются.
+	/// Opt-in auto-ban driven by XDP ringbuf events. Disabled by default (secure
+	/// by default): without it events are only logged.
 	#[serde(default)]
 	pub auto_ban_enabled: bool,
-	/// Длительность авто-бана в секундах (для RATE_LIMIT/CONN_DROP).
+	/// Auto-ban duration in seconds (`RATE_LIMIT` / `CONN_DROP` events).
 	#[serde(default = "default_xdp_auto_ban_duration_secs")]
 	pub auto_ban_duration_secs: u64,
-	/// Порог `conn->fails` для авто-бана по EVENT_CONN_DROP (см. universal_filter.c:368).
+	/// `conn->fails` threshold for auto-ban on `EVENT_CONN_DROP`
+	/// (see `universal_filter.c:368`).
 	#[serde(default = "default_xdp_auto_ban_conn_drop_fails")]
 	pub auto_ban_conn_drop_fails: u8,
 }
@@ -118,6 +124,7 @@ fn default_xdp_auto_ban_conn_drop_fails() -> u8 {
 	3
 }
 
+/// `[logging]` section: log level and format.
 #[derive(Debug, Clone, Deserialize)]
 pub struct LoggingConfig {
 	#[serde(default = "default_log_level")]
@@ -142,6 +149,7 @@ fn default_log_format() -> String {
 	"text".to_string()
 }
 
+/// `[metrics]` section: Prometheus scrape endpoint.
 #[derive(Debug, Clone, Deserialize)]
 pub struct MetricsConfig {
 	#[serde(default = "default_metrics_enabled")]

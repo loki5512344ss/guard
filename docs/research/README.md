@@ -19,7 +19,6 @@
 | [haproxy.md](./haproxy.md) | HAProxy конфиг, mTLS, замена на Rust LB | v0.2 |
 | [envoy.md](./envoy.md) | EWMA балансировка, Circuit Breaker, xDS API | v0.5 |
 | [observability.md](./observability.md) | Prometheus, OpenTelemetry, ClickHouse, Parca | v0.3 |
-| [minecraft-protocol.md](./minecraft-protocol.md) | Handshake парсинг, VarInt, Forge, fingerprinting | v0.1 |
 | [anti-bot.md](./anti-bot.md) | Sonar, challenge системы, AI-обходы, fingerprint | v0.2 |
 | [benchmark.md](./benchmark.md) | Инструменты, методология, ожидаемые результаты | v0.3 |
 | [security.md](./security.md) | STRIDE, mTLS, Zero Trust, supply chain | v0.2 |
@@ -32,8 +31,7 @@
 
 ```
 Хочу написать первую версию (v0.1)
-  → architecture.md + minecraft-protocol.md + ddos.md
-
+  → architecture.md + ddos.md
 Хочу добавить защиту от ботов
   → anti-bot.md
 
@@ -61,7 +59,6 @@
 | [api.md](../api.md) | REST API спецификация |
 | [testing.md](../testing.md) | Методология тестирования |
 | [troubleshooting.md](../troubleshooting.md) | FAQ |
-| [migration.md](../migration.md) | Обновление версий |
 
 ---
 

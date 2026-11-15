@@ -1,61 +1,72 @@
 #ifndef RAMPART_HOOK_API_H
 #define RAMPART_HOOK_API_H
 
-/*
- * ── Rampart protocol-hook contract ──
+/**
+ * Rampart protocol-hook contract.
  *
  * The universal XDP filter is protocol-agnostic: it validates L2/L3/L4,
- * tracks the TCP handshake (SYN_RECEIVED → ESTABLISHED), applies
- * blacklist/whitelist/throttle policy — and then delegates deep payload
- * inspection to an optional protocol hook.
+ * tracks the TCP handshake (SYN_RECEIVED to ESTABLISHED) and applies the
+ * blacklist, whitelist and throttle policy. Only then does it delegate deep
+ * payload inspection to an optional protocol hook.
  *
- * ── WHAT THE HOOK SEES ──
+ * What the hook sees
+ * ------------------
  *
- *   proto_hook() is called ONLY when:
- *     - packet is TCP, destination port is inside the protected range;
- *     - connection passed SYN throttle and completed the 3-way handshake
- *       (state == STATE_ESTABLISHED);
- *     - the segment carries a non-zero payload.
+ * proto_hook() is called only when all of the following hold:
  *
- *   Pure SYN / SYN-ACK / ACK (handshake segments) NEVER reach the hook:
- *   the hook physically cannot block a clean TCP handshake.
- *   Empty ACKs also never reach the hook (keep-alives pass untouched).
+ *   - the packet is TCP and its destination port is inside the protected
+ *     range;
+ *   - the connection passed the SYN throttle and completed the 3-way
+ *     handshake (state == STATE_ESTABLISHED);
+ *   - the segment carries a non-zero payload.
  *
- *   struct cursor  — bounds-checked window over the TCP payload:
- *                     pos = first payload byte, end = one past the last
- *                     byte of the packet (validated against data_end).
- *   struct pkt_meta — read-only metadata: 4-tuple (ports in HOST byte
- *                     order), payload length, full TCP flags byte,
- *                     L3 family.
+ * Pure SYN, SYN-ACK and ACK segments never reach the hook, so a hook
+ * physically cannot block a clean TCP handshake. Empty ACKs never reach it
+ * either: keep-alives pass untouched.
  *
- * ── VERDICTS ──
+ * Arguments:
  *
- *   XDP_PASS   — accept the segment; filter advances expected_seq by
- *                the consumed payload length and keeps conntrack entry.
- *   XDP_DROP   — drop the segment AND tear down the conntrack entry.
- *   Anything else (XDP_ABORTED etc.) is treated as XDP_PASS; do not
- *   return it.
+ *   struct cursor   bounds-checked window over the TCP payload, where pos is
+ *                   the first payload byte and end is one past the last byte
+ *                   of the packet (validated against data_end).
+ *   struct pkt_meta read-only metadata: the 4-tuple (ports in host byte
+ *                   order), payload length, the full TCP flags byte and the
+ *                   L3 family.
  *
- * ── RULES FOR HOOK IMPLEMENTATIONS ──
+ * Verdicts
+ * --------
  *
- *   1. Never block handshake traffic — guaranteed by design (see above),
- *      do not try to work around it either.
- *   2. Bounded loops only: every loop must have a compile-time-constant
- *      trip count (or be provably bounded for the verifier), keep total
- *      complexity low — the program must still load with unrolled loops.
- *   3. Every cursor advance MUST be bounds-checked against c->end
- *      (use cursor_take()); reading past c->end is forbidden even if it
- *      seems in-bounds in the packet.
- *   4. Do not update conntrack/throttle/blacklist maps from the hook;
- *      emit events via push_event() if needed (ringbuf, may fail silently).
- *   5. Keep the hook stateless per-call: all per-connection state lives
- *      in conntrack_map, which belongs to the core filter.
+ *   XDP_PASS  accept the segment; the filter advances expected_seq by the
+ *             consumed payload length and keeps the conntrack entry.
+ *   XDP_DROP  drop the segment and tear down the conntrack entry.
  *
- * ── HOW TO ATTACH A HOOK ──
+ * Any other verdict (XDP_ABORTED and friends) is treated as XDP_PASS, so
+ * returning it is never useful.
  *
- *   1. Create hooks/<proto>_hook.h containing ONLY your own includes
- *      (common.h etc.) and a definition of proto_hook(). Do NOT include
- *      hook_api.h from the hook header — the core includes it for you:
+ * Rules for hook implementations
+ * ------------------------------
+ *
+ *   1. Never block handshake traffic. That is guaranteed by the design
+ *      above; do not work around it either.
+ *   2. Bounded loops only. Every loop needs a compile-time-constant trip
+ *      count, or must be provably bounded for the verifier, and total
+ *      complexity must stay low so the program still loads when unrolled.
+ *   3. Every cursor advance must be bounds-checked against c->end via
+ *      cursor_take(). Reading past c->end is forbidden even when it looks
+ *      in-bounds in the packet.
+ *   4. Do not update the conntrack, throttle or blacklist maps from the
+ *      hook. Emit events through push_event() instead (ring buffer, may
+ *      fail silently).
+ *   5. Keep the hook stateless per call. All per-connection state lives in
+ *      conntrack_map, which belongs to the core filter.
+ *
+ * How to attach a hook
+ * --------------------
+ *
+ *   1. Create hooks/<proto>_hook.h containing only your own includes
+ *      (common.h etc.) and a definition of proto_hook(). Never include
+ *      hook_api.h from the hook header, because the core includes it for
+ *      you:
  *
  *          // hooks/myproto_hook.h
  *          #include "../core/common.h"
@@ -72,20 +83,32 @@
  *            -DRAMPART_PROTO_HOOK='"../hooks/myproto_hook.h"' \
  *            -c xdp/core/universal_filter.c -o universal_filter.o
  *
- *   Without RAMPART_PROTO_HOOK the default no-op stub below is used
+ *   Without RAMPART_PROTO_HOOK the default no-op stub defined below is used,
  *   and every established connection passes.
  */
 
 #include <linux/bpf.h>
 #include "../core/common.h"
 
-// ── Bounds-checked cursor over the payload window ──
+/**
+ * Bounds-checked cursor over the payload window.
+ *
+ * A plain pointer pair, so the hook can hand it to cursor_take() without
+ * extra state to keep in sync.
+ */
 struct cursor {
     __u8 *pos; // next unparsed byte
     __u8 *end; // one past last valid byte (== data_end)
 };
 
-// Take n bytes from the cursor; returns pointer or NULL on overrun.
+/**
+ * Take n bytes from the cursor.
+ *
+ * @param c  cursor to advance
+ * @param n  number of bytes the caller intends to read
+ * @return   pointer to the claimed bytes, or NULL when they would overrun
+ *           c->end
+ */
 static __always_inline __u8 *cursor_take(struct cursor *c, __u32 n)
 {
     if (c->pos + n > c->end)
@@ -96,7 +119,13 @@ static __always_inline __u8 *cursor_take(struct cursor *c, __u32 n)
     return p;
 }
 
-// ── Read-only packet metadata handed to the hook ──
+/**
+ * Read-only packet metadata handed to the hook.
+ *
+ * Addresses stay in network byte order and ports are converted to host order,
+ * so a hook can compare ports directly but must byte-swap addresses before
+ * printing them.
+ */
 struct pkt_meta {
     __u32 src_ip;      // IPv4 addr, or low 32 bits of IPv4-mapped IPv6
     __u32 dst_ip;      // same convention as src_ip
@@ -110,7 +139,15 @@ struct pkt_meta {
 #ifdef RAMPART_PROTO_HOOK
 #include RAMPART_PROTO_HOOK
 #else
-/* Default stub: no deep inspection, everything established passes. */
+/**
+ * Default hook stub.
+ *
+ * Performs no deep inspection, so every established connection passes.
+ *
+ * @param c  payload cursor (unused)
+ * @param m  packet metadata (unused)
+ * @return   always XDP_PASS
+ */
 static __always_inline enum xdp_action
 proto_hook(struct cursor *c, struct pkt_meta *m)
 {

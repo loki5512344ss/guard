@@ -1,3 +1,9 @@
+//! Prometheus registry for the edge process: metric handles and the scrape
+//! endpoint.
+//!
+//! Metric names and help strings are part of the public monitoring contract and
+//! must stay stable across releases.
+
 use prometheus::{
 	Encoder, IntCounter, IntCounterVec, IntGauge, register_int_counter, register_int_counter_vec, register_int_gauge,
 };
@@ -65,7 +71,13 @@ pub static INTEL_ALERTS_TOTAL: LazyLock<IntCounter> = LazyLock::new(|| {
 		.expect("INTEL_ALERTS_TOTAL")
 });
 
-/// Отдаёт Prometheus-метрики по голому HTTP/0.9-совместимому ответу.
+/// Serves the Prometheus registry over a minimal HTTP endpoint.
+///
+/// Runs until the task is dropped; a failed connection is logged and never
+/// aborts the loop.
+///
+/// The request line is not parsed: every connection receives the current
+/// registry snapshot with `Content-Length` and is then closed.
 pub async fn run_metrics_server(addr: &str) {
 	let listener = match TcpListener::bind(addr).await {
 		Ok(l) => l,

@@ -5,7 +5,7 @@ use super::types::{
 	driver_supports_native_xdp,
 };
 
-/// Структурированный отчёт о пригодности окружения для XDP.
+/// Structured report on how suitable the environment is for XDP.
 pub struct EnvironmentReport {
 	pub kernel_version: Option<KernelVersion>,
 	pub btf_available: bool,
@@ -15,7 +15,7 @@ pub struct EnvironmentReport {
 }
 
 impl EnvironmentReport {
-	/// Собирает отчёт через произвольную реализацию [`SystemProbe`].
+	/// Collects the report through any [`SystemProbe`] implementation.
 	#[must_use]
 	pub fn collect(probe: &dyn SystemProbe, interface: &str) -> Self {
 		let kernel_version = probe
@@ -61,7 +61,7 @@ impl EnvironmentReport {
 		}
 	}
 
-	/// Ожидаемый режим attach по таблице драйверов.
+	/// Expected attach mode according to the driver table.
 	#[must_use]
 	pub fn attach_mode(&self) -> AttachMode {
 		match self.driver_name.as_deref() {
@@ -70,7 +70,7 @@ impl EnvironmentReport {
 		}
 	}
 
-	/// Человекочитаемое объяснение вердикта.
+	/// Human-readable explanation of the verdict.
 	#[must_use]
 	pub fn verdict(&self) -> String {
 		let kernel = self
@@ -87,10 +87,10 @@ impl EnvironmentReport {
 		}
 	}
 
-	/// Fail-fast проверка минимальной версии ядра.
+	/// Fail-fast check of the minimum kernel version.
 	///
 	/// # Errors
-	/// Версия ядра не определена или ниже [`MIN_KERNEL`].
+	/// The kernel version is unknown or below [`MIN_KERNEL`].
 	pub fn validate(&self) -> Result<()> {
 		let Some(version) = self.kernel_version else {
 			bail!("не удалось определить версию ядра ({OSRELEASE_PATH}) — XDP attach отклонён");
@@ -102,11 +102,11 @@ impl EnvironmentReport {
 	}
 }
 
-/// Предстартовая диагностика перед загрузкой XDP-программы:
-/// структурный отчёт в лог, предупреждения, fail-fast на старом ядре.
+/// Pre-attach diagnostics before the XDP program is loaded: a structured report in the
+/// log, warnings, and a fail-fast check for an old kernel.
 ///
 /// # Errors
-/// См. [`EnvironmentReport::validate`].
+/// See [`EnvironmentReport::validate`].
 #[cfg(feature = "xdp")]
 pub(crate) fn preflight(interface: &str) -> Result<()> {
 	use super::types::FilesystemProbe;

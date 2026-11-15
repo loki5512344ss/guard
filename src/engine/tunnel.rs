@@ -1,4 +1,5 @@
-//! Generic TCP proxy: фильтры входа → protocol handshake → upstream.
+//! Generic TCP proxy pipeline: ingress filters, protocol handshake, upstream
+//! relay.
 
 use crate::config::Config;
 use crate::engine::challenge::DifficultyAdjuster;
@@ -20,7 +21,7 @@ mod gateway;
 #[cfg(feature = "protocol-minecraft")]
 mod proxy;
 
-/// Общее состояние edge-движка, разделяемое между accept-loop'ами.
+/// Shared edge engine state handed to every accept loop by [`Arc`].
 pub struct Gateway {
 	pub config: Arc<Config>,
 	pub rate_limiter: Arc<RateLimiter>,

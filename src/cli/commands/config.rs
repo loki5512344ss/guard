@@ -1,3 +1,6 @@
+//! `config` subcommand: prints configuration usage; lookups and updates are not
+//! implemented yet.
+
 pub async fn run(key: Option<String>, value: Option<String>) -> anyhow::Result<()> {
 	match (key, value) {
 		(Some(_), Some(_)) => {

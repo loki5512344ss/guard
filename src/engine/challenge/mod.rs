@@ -1,5 +1,5 @@
-//! Универсальный SHA-256 hashcash: генерация challenge, решатель,
-//! верификатор и адаптивная сложность.
+//! Universal SHA-256 hashcash: challenge generation, solver, verifier and
+//! adaptive difficulty.
 
 mod difficulty;
 mod pow;

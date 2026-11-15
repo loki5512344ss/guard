@@ -41,28 +41,29 @@ impl XdpFilter {
 		}
 	}
 
-	/// Задаёт глобалы для патчинга `.rodata` при следующем `load()`.
+	/// Sets the globals used to patch `.rodata` on the next `load()`.
 	pub fn set_globals(&mut self, globals: XdpGlobals) {
 		self.globals = globals;
 	}
 
-	/// Подключает OPT-IN авто-бан по ringbuf-событиям к userspace-`Blacklist`.
+	/// Wires the opt-in auto-ban from ringbuf events into the userspace `Blacklist`.
 	///
-	/// До вызова `load()`. Политика читается из `[xdp]`-секции; если
-	/// `auto_ban_enabled = false` (по умолчанию), колбэк лишь логирует события и
-	/// не трогает blacklist.
+	/// Must be called before `load()`. The policy is read from the `[xdp]` section; when
+	/// `auto_ban_enabled = false` (the default) the callback only logs events and never
+	/// touches the blacklist.
 	pub fn set_autoban(&mut self, blacklist: Arc<Blacklist>, config: &XdpConfig) {
 		self.blacklist = Some(blacklist);
 		self.autoban = AutoBanConfig::from_xdp(config);
 	}
 
 	pub fn load(&mut self) -> Result<()> {
-		// Диагностика ДО загрузки: fail-fast на неподдерживаемом ядре/драйвере.
+		// Diagnostics before loading: fail fast on an unsupported kernel or driver.
 		super::probe::preflight(&self.interface)?;
 
 		let bpf_obj = include_bytes!(concat!(env!("OUT_DIR"), "/universal_filter.o"));
-		// Имя объекта задаётся ЯВНО: при open_memory libbpf не знает имени файла,
-		// а по нему именуются внутренние maps ("rampart_.rodata" в patch_rodata).
+		// The object name is set explicitly: with `open_memory` libbpf does not know the
+		// file name, yet the internal maps are named after it (`rampart_.rodata`, see
+		// `patch_rodata`).
 		let mut open_obj = ObjectBuilder::default()
 			.name("rampart")
 			.context("failed to set BPF object name")?
@@ -87,9 +88,9 @@ impl XdpFilter {
 			.find(|p| p.name() == "rampart_universal_filter")
 			.context("XDP program 'rampart_universal_filter' not found")?;
 		let xdp = Xdp::new(prog.as_fd());
-		// Лестница режимов: пробуем native (drv); если драйвер не тянет —
-		// честный fallback в generic (skb) с предупреждением (вывод №1 из
-		// конкурентного анализа: печатать режим как есть, без вранья).
+		// Mode ladder: try native (drv) first; if the driver cannot handle it, fall back to
+		// generic (skb) with a warning (finding #1 of the competitive analysis: report the
+		// mode as it is, no window dressing).
 		let ifindex = ifindex as i32;
 		if let Err(e) = xdp.attach(ifindex, XdpFlags::NONE) {
 			tracing::warn!(
@@ -167,10 +168,10 @@ impl XdpFilter {
 			.with_context(|| format!("map '{}' not found", name))
 	}
 
-	/// Читает карту `prefix_stats` (агрегаты по префиксам /24 и /64).
+	/// Reads the `prefix_stats` map (aggregates per /24 and /64 prefix).
 	///
 	/// # Errors
-	/// XDP не загружен, карта отсутствует в объекте или ошибка BPF-чтения.
+	/// XDP is not loaded, the map is missing from the object, or a BPF read fails.
 	pub fn read_prefix_stats(&self) -> Result<Vec<(PrefixKey, PrefixStatsVal)>> {
 		let map = self.find_map("prefix_stats")?;
 		let mut out = Vec::new();

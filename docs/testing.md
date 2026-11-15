@@ -37,6 +37,19 @@ XDP: smoke-check компиляции BPF-программы:
 clang -O2 -g -target bpf -c xdp/core/universal_filter.c -o /tmp/universal_filter.o
 ```
 
+Функциональные проверки на реальном ядре (нужен root: CAP_BPF + CAP_NET_ADMIN,
+`bpftool`, `clang`, `python3`):
+
+```bash
+sudo bash scripts/xdp_ipv6_smoke.sh
+```
+
+Поднимает netns + veth, грузит программу через verifier и проверяет: бан IPv6 и IPv4
+(включая короткие UDP-датаграммы), снятие бана, истечение TTL по монотонным часам и
+`udp_policy = "rate-limit"` для IPv6 (политика патчится в `.rodata` до загрузки).
+`scripts/xdp_netns_smoke.sh` дополнительно гоняет реальный бинарь `rampart` end-to-end
+(требует `hping3`).
+
 ---
 
 ## 3. Локальный integration-стенд (Docker)

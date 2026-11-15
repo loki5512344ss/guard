@@ -1,3 +1,3 @@
-//! Subnet-level детектор: юзерспейс-агрегатор префиксов и монитор вердиктов.
+//! Subnet-level detector: userspace prefix aggregator and verdict monitor.
 pub mod monitor;
 pub mod tracker;

@@ -1,4 +1,4 @@
-//! `rampart-tui` — интерактивный терминальный дашборд live-метрик Rampart.
+//! `rampart-tui` is an interactive terminal dashboard for live Rampart metrics.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -21,7 +21,7 @@ struct Cli {
 	/// URL Prometheus metrics endpoint
 	#[arg(long, default_value = "http://127.0.0.1:9090/metrics")]
 	url: String,
-	/// Период опроса, секунды
+	/// Scrape interval in seconds
 	#[arg(long, default_value_t = 1)]
 	refresh_secs: u64,
 }

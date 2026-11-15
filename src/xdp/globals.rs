@@ -1,53 +1,58 @@
-//! Патчинг volatile const глобалов XDP-программы (`xdp/core/config.h`) из TOML-конфига.
+//! Patches the XDP program's volatile-const globals (`xdp/core/config.h`) from the TOML config.
 //!
-//! Глобалы живут в секции `.rodata`, которая при загрузке превращается в карту
-//! с именем `rampart_.rodata`. Образ патчится до `load()` через
-//! `OpenMapMut::set_initial_value()` (см. [`crate::xdp::filter`]).
+//! The globals live in the `.rodata` section, which libbpf turns into a map named
+//! `rampart_.rodata` on load. The image is patched before `load()` via
+//! `OpenMapMut::set_initial_value()` (see [`crate::xdp::filter`]).
 //!
-//! # Схема маппинга `[xdp]` → G_* (единственный источник истины)
+//! # `[xdp]` -> `G_*` mapping (single source of truth)
 //!
-//! | Конфиг                  | Глобал                       | Тип |
+//! | Config key              | Global                       | Type |
 //! |-------------------------|------------------------------|-----|
 //! | `protected_port_start`  | `G_START_PORT`               | u16 |
 //! | `protected_port_end`    | `G_END_PORT`                 | u16 |
 //! | `udp_policy`            | `G_UDP_POLICY`               | u8 ("pass"=0, "drop"=1, "rate-limit"=2) |
 //! | `udp_rate_hit_count`    | `G_UDP_HIT_COUNT`            | u32 |
-//! | `udp_rate_window_ms`    | `G_UDP_WINDOW_NS`            | u64 (мс → нс) |
-//! | `throttle_enabled`      | `G_FEATURE_SYN_THROTTLE`     | u8 (bool → 0/1) |
-//! | `events_enabled`        | `G_FEATURE_EVENTS`           | u8 (bool → 0/1) |
-//! | `syn_challenge_enabled` | `G_SYN_CHALLENGE_ENABLED`    | u8 (bool → 0/1) |
+//! | `udp_rate_window_ms`    | `G_UDP_WINDOW_NS`            | u64 (ms -> ns) |
+//! | `throttle_enabled`      | `G_FEATURE_SYN_THROTTLE`     | u8 (bool -> 0/1) |
+//! | `events_enabled`        | `G_FEATURE_EVENTS`           | u8 (bool -> 0/1) |
+//! | `syn_challenge_enabled` | `G_SYN_CHALLENGE_ENABLED`    | u8 (bool -> 0/1) |
 //! | `challenge_secret_hex`  | `G_CHALLENGE_SECRET`         | u64 (hex, big-endian) |
 //! | `challenge_timeout_ms`  | `G_CHALLENGE_TIMEOUT_MS`     | u32 |
 //!
-//! Остальные глобалы (`G_SYN_*`, `G_CONNTRACK_IDLE_NS`, `G_PLAYER_IDLE_NS`,
-//! `G_BAN_DURATION_NS`, `G_MAX_OUT_OF_ORDER`, `G_CHALLENGE_VERIFIED_TTL_NS`)
-//! конфигом пока не управляются и патчатся значениями по умолчанию из config.h.
+//! The remaining globals (`G_SYN_*`, `G_CONNTRACK_IDLE_NS`, `G_PLAYER_IDLE_NS`,
+//! `G_BAN_DURATION_NS`, `G_MAX_OUT_OF_ORDER`, `G_CHALLENGE_VERIFIED_TTL_NS`) are not
+//! configurable yet; they are patched with the defaults from config.h.
 
 use anyhow::{Context, Result, bail};
+use std::mem::offset_of;
 
 use crate::config::XdpConfig;
 
-/// Имя карты с образом `.rodata` загруженного BPF-объекта.
-/// Имя внутренней `.rodata`-карты при `ObjectBuilder::name("rampart")`:
-/// libbpf конструирует `<obj_name><section>` без замены точки (sanitizer
-/// пропускаёт `.`; libbpf.c, map name logic) → `rampart.rodata`.
-/// Поиск в `patch_rodata` всё равно по суффиксу — имя здесь для диагностики.
+/// Name of the map holding the loaded BPF object's `.rodata` image.
+///
+/// This is the name of libbpf's internal `.rodata` map when the object is built with
+/// `ObjectBuilder::name("rampart")`: libbpf concatenates `<obj_name><section>` without
+/// rewriting the dot (the sanitizer passes `.` through; see libbpf.c map naming), so the
+/// result is `rampart.rodata`. `patch_rodata` matches by suffix anyway, so the name is
+/// only used for diagnostics.
 pub(crate) const RODATA_MAP_NAME: &str = "rampart.rodata";
 
-/// Размер образа `.rodata` в байтах (см. `build_rodata_image`).
-pub const RODATA_SIZE: usize = 96;
+/// Size of the `.rodata` image in bytes: exactly `sizeof(struct rampart_config)` from
+/// `xdp/core/config.h`, which `XdpGlobals` (`#[repr(C)]`) mirrors field for field.
+pub const RODATA_SIZE: usize = std::mem::size_of::<XdpGlobals>();
 
-/// Значение `G_UDP_POLICY`: пропускать UDP.
+/// `G_UDP_POLICY` value: pass UDP through.
 pub const UDP_POLICY_PASS: u8 = 0;
-/// Значение `G_UDP_POLICY`: дропать весь UDP.
+/// `G_UDP_POLICY` value: drop all UDP.
 pub const UDP_POLICY_DROP: u8 = 1;
-/// Значение `G_UDP_POLICY`: rate-limit по окну/порогу.
+/// `G_UDP_POLICY` value: rate-limit per window/threshold.
 pub const UDP_POLICY_RATE_LIMIT: u8 = 2;
 
-/// Дефолт-плейсхолдер `G_CHALLENGE_SECRET` из config.h.
+/// Default placeholder for `G_CHALLENGE_SECRET` from config.h.
 const DEFAULT_CHALLENGE_SECRET: u64 = 0xA5A5_A5A5_A5A5_A5A5;
 
-/// Runtime-значения глобалов XDP-программы; `Default` совпадает с config.h.
+/// Runtime values of the XDP program globals; `Default` matches config.h.
+#[repr(C)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct XdpGlobals {
 	pub start_port: u16,
@@ -96,53 +101,55 @@ impl Default for XdpGlobals {
 }
 
 impl XdpGlobals {
-	/// Собирает байтовый образ `.rodata` в порядке объявления глобалов
-	/// в `xdp/core/config.h` с естественным выравниванием каждого поля.
+	/// Builds the byte image of `.rodata`: a mirror of `struct rampart_config` from
+	/// `xdp/core/config.h`.
 	///
-	/// RISK: раскладка предполагает, что линкер кладёт статические переменные
-	/// в секцию `.rodata` в порядке объявления с natural alignment — на
-	/// практике это так (каждая `static volatile const` получает своё
-	/// выравнивание, padding виден в смещениях ниже), но стандарт C этого не
-	/// гарантирует. TODO: верифицировать смещения на сервере через BTF-dump
-	/// карты `rampart_.rodata` (`bpftool btf dump`) и зафиксировать их здесь.
+	/// Offsets come from the `#[repr(C)]` type itself (`offset_of!`) instead of being
+	/// hardcoded, because the layout is defined by the C struct — not by the symbol order
+	/// the linker happens to pick.
 	pub fn build_rodata_image(&self) -> Vec<u8> {
 		let mut img = vec![0u8; RODATA_SIZE];
-		// u16 ×2 без padding: смещения 0..4.
-		img[0..2].copy_from_slice(&self.start_port.to_le_bytes());
-		img[2..4].copy_from_slice(&self.end_port.to_le_bytes());
-		// u32, align 4: 4..8.
-		img[4..8].copy_from_slice(&self.syn_hit_count.to_le_bytes());
-		// u64, align 8: 8..48 (SYN throttle + idle timeouts + ban duration).
-		img[8..16].copy_from_slice(&self.syn_window_ns.to_le_bytes());
-		img[16..24].copy_from_slice(&self.syn_ban_duration_ns.to_le_bytes());
-		img[24..32].copy_from_slice(&self.conntrack_idle_ns.to_le_bytes());
-		img[32..40].copy_from_slice(&self.player_idle_ns.to_le_bytes());
-		img[40..48].copy_from_slice(&self.ban_duration_ns.to_le_bytes());
-		// u8 ×3 подряд: 48, 49, 50 (max_out_of_order, udp_policy, —).
-		img[48] = self.max_out_of_order;
-		img[49] = self.udp_policy;
-		// u32 после u8: padding 50..52, значение 52..56.
-		img[52..56].copy_from_slice(&self.udp_hit_count.to_le_bytes());
-		// u64, align 8: 56..64.
-		img[56..64].copy_from_slice(&self.udp_window_ns.to_le_bytes());
-		// u8 ×3 (feature flags + challenge flag): 64, 65, 66.
-		img[64] = u8::from(self.feature_syn_throttle);
-		img[65] = u8::from(self.feature_events);
-		img[66] = u8::from(self.syn_challenge_enabled);
-		// u64 после u8: padding 67..72, значение 72..80.
-		img[72..80].copy_from_slice(&self.challenge_secret.to_le_bytes());
-		// u32: 80..84.
-		img[80..84].copy_from_slice(&self.challenge_timeout_ms.to_le_bytes());
-		// u64 после u32: padding 84..88, значение 88..96.
-		img[88..96].copy_from_slice(&self.challenge_verified_ttl_ns.to_le_bytes());
+		let put16 = |img: &mut [u8], off: usize, v: u16| img[off..off + 2].copy_from_slice(&v.to_le_bytes());
+		let put32 = |img: &mut [u8], off: usize, v: u32| img[off..off + 4].copy_from_slice(&v.to_le_bytes());
+		let put64 = |img: &mut [u8], off: usize, v: u64| img[off..off + 8].copy_from_slice(&v.to_le_bytes());
+		put16(&mut img, offset_of!(Self, start_port), self.start_port);
+		put16(&mut img, offset_of!(Self, end_port), self.end_port);
+		put32(&mut img, offset_of!(Self, syn_hit_count), self.syn_hit_count);
+		put64(&mut img, offset_of!(Self, syn_window_ns), self.syn_window_ns);
+		put64(
+			&mut img,
+			offset_of!(Self, syn_ban_duration_ns),
+			self.syn_ban_duration_ns,
+		);
+		put64(&mut img, offset_of!(Self, conntrack_idle_ns), self.conntrack_idle_ns);
+		put64(&mut img, offset_of!(Self, player_idle_ns), self.player_idle_ns);
+		put64(&mut img, offset_of!(Self, ban_duration_ns), self.ban_duration_ns);
+		img[offset_of!(Self, max_out_of_order)] = self.max_out_of_order;
+		img[offset_of!(Self, udp_policy)] = self.udp_policy;
+		put32(&mut img, offset_of!(Self, udp_hit_count), self.udp_hit_count);
+		put64(&mut img, offset_of!(Self, udp_window_ns), self.udp_window_ns);
+		img[offset_of!(Self, feature_syn_throttle)] = u8::from(self.feature_syn_throttle);
+		img[offset_of!(Self, feature_events)] = u8::from(self.feature_events);
+		img[offset_of!(Self, syn_challenge_enabled)] = u8::from(self.syn_challenge_enabled);
+		put64(&mut img, offset_of!(Self, challenge_secret), self.challenge_secret);
+		put32(
+			&mut img,
+			offset_of!(Self, challenge_timeout_ms),
+			self.challenge_timeout_ms,
+		);
+		put64(
+			&mut img,
+			offset_of!(Self, challenge_verified_ttl_ns),
+			self.challenge_verified_ttl_ns,
+		);
 		img
 	}
 
-	/// Строит глобалы из секции `[xdp]` конфига.
+	/// Builds the globals from the `[xdp]` section of the config.
 	///
 	/// # Errors
-	/// Неизвестное значение `udp_policy`; некорректный `challenge_secret_hex`
-	/// (не hex или не 8 байт); `protected_port_end < protected_port_start`.
+	/// Unknown `udp_policy` value; malformed `challenge_secret_hex` (not hex, or not
+	/// 8 bytes); `protected_port_end < protected_port_start`.
 	pub fn from_config(cfg: &XdpConfig) -> Result<Self> {
 		let mut g = Self {
 			start_port: cfg.protected_port_start,
@@ -175,7 +182,8 @@ impl XdpGlobals {
 	}
 }
 
-/// Парсит 128-битный hex (16 символов, опциональный префикс `0x`) в u64 (big-endian).
+/// Parses a 16-hex-digit secret (8 bytes, optional `0x` prefix) into a big-endian u64.
+/// `_`, `:` and `-` separators are ignored.
 fn parse_secret_hex(s: &str) -> Result<u64> {
 	let cleaned = s.trim().trim_start_matches("0x").replace(['_', ':', '-'], "");
 	let bytes = hex::decode(&cleaned).with_context(|| format!("invalid xdp.challenge_secret_hex '{s}'"))?;

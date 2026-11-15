@@ -103,7 +103,10 @@ impl Blacklist {
 		self.redis_entries.remove(&ip);
 	}
 
-	/// Replace Redis-managed bans while preserving local detector bans.
+	/// Replaces the Redis-managed ban set, preserving locally detected bans.
+	///
+	/// `redis_entries` is rebuilt from `entries` wholesale, so a ban that
+	/// disappeared upstream stops applying after this call.
 	pub fn replace_redis<I>(&self, entries: I)
 	where
 		I: IntoIterator<Item = (IpAddr, Duration, String)>,

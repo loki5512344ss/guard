@@ -1,18 +1,20 @@
 #!/usr/bin/env bash
-# netns+veth smoke-тест XDP-пути на РЕАЛЬНОМ ядре (вывод №7 конкурентного анализа).
+# netns + veth smoke test of the XDP path on a real kernel (finding #7 of the
+# concurrency analysis).
 #
-# Проверяет то, что невозможно проверить в контейнере CI без CAP_BPF:
-#   1. verifier принимает universal_filter.o (загрузка через libbpf);
-#   2. attach на живом интерфейсе в netns, native-режим;
-#   3. легитимный HTTP проксируется;
-#   4. SYN-флуд порождает ringbuf-события -> opt-in auto-ban работает;
-#   5. по завершении бана трафик восстанавливается (expiry);
-#   6. после SIGTERM XDP-ПРОГРАММА РЕАЛЬНО ОТВЯЗАНА (регрессия на bug fd=-1).
+# Covers what cannot be checked in a CI container without CAP_BPF:
+#   1. the verifier accepts universal_filter.o (loaded through libbpf);
+#   2. attach on a live interface inside a netns, native mode;
+#   3. legitimate HTTP is proxied;
+#   4. a SYN flood produces ringbuf events, so opt-in auto-ban works;
+#   5. traffic recovers once the ban expires;
+#   6. after SIGTERM the XDP program is really detached (regression on the
+#      fd=-1 bug).
 #
-# Запуск: на хосте с root/CAP_BPF (VDS или VM-раннер CI), не в контейнере:
+# Run: on a host with root/CAP_BPF (VDS or a VM CI runner), not in a container:
 #   BIN=./target/release/rampart bash scripts/xdp_netns_smoke.sh
 #
-# Требования: iproute2, bpftool, hping3, python3 (http.server), curl.
+# Requires: iproute2, bpftool, hping3, python3 (http.server), curl.
 
 set -u
 
@@ -32,6 +34,7 @@ PASS=1
 fail() { echo "FAIL: $1"; PASS=0; }
 ok()   { echo "ok:   $1"; }
 
+# Kill both processes and drop the namespace, whatever the exit path was.
 cleanup() {
     [ -n "$RAMPID" ] && kill -9 "$RAMPID" 2>/dev/null
     [ -n "$SRVPID" ] && kill -9 "$SRVPID" 2>/dev/null
@@ -43,7 +46,8 @@ trap cleanup EXIT
 [ "$(id -u)" = 0 ] || { echo "нужен root (CAP_BPF+CAP_NET_ADMIN)"; exit 2; }
 [ -x "$BIN" ] || { echo "бинарь не найден: $BIN"; exit 2; }
 
-# --- 1. netns + veth: весь тест изолирован, прод-трафик не затрагивается ---
+# Phase 1: netns plus veth, so the whole test is isolated and production
+# traffic is never touched.
 ip netns del "$NS" 2>/dev/null
 ip netns add "$NS" || { echo "не удалось создать netns"; exit 2; }
 ip link add rth0 type veth peer name rtap
@@ -54,7 +58,8 @@ ip -n "$NS" link set rtap up
 ip -n "$NS" link set lo up
 ok "netns $NS + veth подняты"
 
-# --- 2. конфиг edge: узкий защищённый диапазон, автобан включён (иначе нечего тестить) ---
+# Phase 2: edge config. The protected range is a single port and auto-ban is
+# on, otherwise there is nothing to observe.
 cat > "$WORK/edge.toml" <<EOF
 [bind]
 address = "$EDGE_IP"
@@ -94,13 +99,13 @@ format = "text"
 enabled = false
 EOF
 
-# --- 3. origin на host-половине veth ---
+# Phase 3: origin server on the host half of the veth pair.
 echo "<html><body>rampart-smoke-origin</body></html>" > "$WORK/index.html"
 python3 -m http.server "$ORIGIN_PORT" --bind "$HOST_IP" -d "$WORK" >/dev/null 2>&1 &
 SRVPID=$!
 sleep 0.5
 
-# --- 4. старт edge внутри netns, ожидание attach ---
+# Phase 4: start edge inside the namespace and wait for the attach log line.
 RUST_LOG=rampart=debug RAMPART_CONFIG="$WORK/edge.toml" \
     ip netns exec "$NS" "$BIN" > "$WORK/rampart.log" 2>&1 &
 RAMPID=$!
@@ -116,8 +121,8 @@ else
     fail "XDP не аттачнулся; лог:"; sed -n '1,30p' "$WORK/rampart.log"; exit 1
 fi
 
-# Режим attach: native ожидаем на veth, но fallback на generic — штатный
-# путь лестницы в load(); сверяем с честным логом режима от rampart.
+# Attach mode: native is expected on veth, but generic is a normal fallback in
+# the load() ladder, so compare against the mode rampart actually reports.
 if ip -n "$NS" link show rtap | grep -qE "xdp( |$)"; then
     ok "attach native (ip link: xdp)"
 elif ip -n "$NS" link show rtap | grep -q "xdpgeneric"; then
@@ -127,13 +132,13 @@ else
 fi
 grep -oE "mode: [a-z ()]+" "$WORK/rampart.log" | tail -1
 
-# --- 5. легитимный HTTP проходит прокси ---
+# Phase 5: a legitimate HTTP request must reach the origin through the proxy.
 BODY=$(curl -s --max-time 5 "http://$EDGE_IP:$EDGE_PORT/" || true)
 echo "$BODY" | grep -q "rampart-smoke-origin" \
     && ok "легитимный HTTP проксируется" \
     || fail "легитимный HTTP не дошёл до origin"
 
-# --- 6. SYN-флуд -> throttle -> ringbuf events -> auto-ban ---
+# Phase 6: SYN flood, then throttle, ringbuf events and auto-ban.
 hping3 -S -p "$EDGE_PORT" -c 4000 -i u200 "$EDGE_IP" >/dev/null 2>&1 || true
 sleep 3
 grep -q "xdp event" "$WORK/rampart.log" \
@@ -149,20 +154,21 @@ BANS=$(ip netns exec "$NS" curl -s --max-time 2 "http://127.0.0.1:$METRICS_PORT/
 [ "${BANS:-0}" != "0" ] && ok "метрика rampart_xdp_autobans_total=$BANS" \
     || fail "метрика autobans пуста"
 
-# забаненный источник отклоняется до истечения 5с
+# A banned source is refused while the ban is active.
 HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 2 "http://$EDGE_IP:$EDGE_PORT/" || echo "err")
 [ "$HTTP_CODE" = "err" ] || [ "$HTTP_CODE" = "000" ] \
     && ok "забаненный клиент отклонён (http=$HTTP_CODE)" \
     || fail "забаненный клиент получил ответ ($HTTP_CODE)"
 
-# --- 7. expiry: через 7с (> ban 5s) трафик возвращается ---
+# Phase 7: expiry. After 7s (ban is 5s) traffic must come back on its own.
 sleep 7
 BODY=$(curl -s --max-time 5 "http://$EDGE_IP:$EDGE_PORT/" || true)
 echo "$BODY" | grep -q "rampart-smoke-origin" \
     && ok "бан истёк, легитимный трафик восстановлен" \
     || fail "после expiry трафик не восстановился"
 
-# --- 8. ГРЕЙСФУЛ СТОП -> ПРОГРАММА ОТВЯЗАНА (регрессия на borrow_raw(-1)) ---
+# Phase 8: graceful stop must leave no program behind (regression on
+# borrow_raw(-1) during detach).
 kill -TERM "$RAMPID"
 wait "$RAMPID"; RC=$?
 RAMPID=""
@@ -176,7 +182,7 @@ else
     ok "XDP-программа реально отвязана после SIGTERM"
 fi
 
-# --- итог ---
+# Summary: exit code drives CI, the log excerpt makes a failure diagnosable.
 echo
 if [ "$PASS" = 1 ]; then
     echo "PASS — xdp netns smoke ($(uname -r))"

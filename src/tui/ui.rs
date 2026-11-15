@@ -1,4 +1,7 @@
-//! Отрисовка кадра ratatui: статус-панель, таблица счётчиков, график pps/drops, помощь.
+//! ratatui frame rendering: status panel, counters table, pps/drops chart and
+//! the key help line.
+//!
+//! Owns the visual layout only; all values come from [`FrameData`].
 
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
@@ -9,7 +12,7 @@ use ratatui::widgets::{Axis, Block, Borders, Chart, Dataset, GraphType, Paragrap
 
 use crate::tui::state::{FrameData, HistoryPoint};
 
-/// Имена метрик edge/manager (см. src/metrics.rs и src/xdp/metrics.rs).
+/// Edge/manager metric names (see src/metrics.rs and src/xdp/metrics.rs).
 mod names {
 	pub const XDP_TOTAL: &str = "rampart_xdp_total";
 	pub const XDP_TCP: &str = "rampart_xdp_tcp";
@@ -27,7 +30,7 @@ mod names {
 	pub const ATTACK_STATUS: &str = "rampart_attack_status";
 }
 
-/// Рисует весь кадр.
+/// Draws the whole frame.
 pub fn render(frame: &mut Frame, data: &FrameData) {
 	let [header, body, help] =
 		Layout::vertical([Constraint::Length(3), Constraint::Min(3), Constraint::Length(1)]).areas(frame.area());
@@ -69,7 +72,7 @@ fn render_header(frame: &mut Frame, area: Rect, data: &FrameData) {
 	frame.render_widget(Paragraph::new(line).block(Block::new().borders(Borders::ALL)), area);
 }
 
-/// Пары «подпись → имя метрики» для таблицы.
+/// Counter label to metric name pairs for the table.
 const COUNTER_ROWS: &[(&str, &str)] = &[
 	("XDP total", names::XDP_TOTAL),
 	("XDP tcp", names::XDP_TCP),

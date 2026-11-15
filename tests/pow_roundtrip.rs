@@ -1,3 +1,6 @@
+//! PoW roundtrip tests: solver output must satisfy the verifier, replays and
+//! garbage must not.
+
 use rampart::engine::challenge::{Challenge, solve};
 
 /// Fixed 32-byte token: sha256(hex(token) || "garbage") starts with "ebc1",

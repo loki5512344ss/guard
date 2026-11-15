@@ -1,23 +1,23 @@
-//! Shutdown-drain машина edge-демона: сигнал, drain-таймер и код завершения.
+//! Edge daemon shutdown drain: signal handling, drain timer and exit code.
 
 use std::time::Duration;
 use tokio::sync::oneshot;
 use tokio::sync::watch;
 
-/// Результат завершения демона. Код выхода вычисляется здесь, но сам
-/// `process::exit` вызывается только в точке входа бинаря (`src/bin/rampart.rs`),
-/// поэтому библиотечный код остаётся свободным от lint `exit`.
+/// Daemon exit outcome. The exit code is computed here, but `process::exit` is
+/// only called from the binary entry point (`src/bin/rampart.rs`), which keeps
+/// the library free of the `exit` lint.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RunExit {
-	/// Listener отработал штатно: drain уложился в таймаут.
+	/// The listener finished cleanly: the drain fit into the timeout.
 	Ok,
-	/// Истёк drain-таймаут: бинарь обязан завершить процесс немедленно
-	/// (замена прежнему `process::exit(0)` внутри shutdown-таймера).
+	/// The drain timeout expired: the binary must terminate the process immediately
+	/// (replaces the former `process::exit(0)` inside the shutdown timer).
 	DrainTimeout,
 }
 
 impl RunExit {
-	/// Код завершения процесса для данного результата.
+	/// Process exit code for this outcome.
 	#[must_use]
 	pub const fn code(self) -> i32 {
 		match self {
@@ -27,11 +27,11 @@ impl RunExit {
 	}
 }
 
-/// Ставит фоновую shutdown-задачу.
+/// Spawns the background shutdown task.
 ///
-/// shutdown-таймер обязан завершить процесс: сам `process::exit` вынесен в
-/// бинарь, а здесь мы лишь уведомляем `run` об истечении drain-таймаута через
-/// oneshot-канал. Логи и тайминг (5s после сигнала) сохранены без изменений.
+/// The timer must end the process, but `process::exit` now lives in the binary,
+/// so this only reports the drain timeout to `run` over a oneshot channel. The
+/// process is given five seconds to drain after the signal.
 pub(crate) fn spawn_shutdown_drain(shutdown_tx: watch::Sender<bool>, drain_tx: oneshot::Sender<()>) {
 	tokio::spawn(async move {
 		wait_for_signal().await;
@@ -60,7 +60,7 @@ mod tests {
 
 	#[test]
 	fn run_exit_codes_match_previous_process_exit() {
-		// Штатный путь и прежний drain-timeout (`process::exit(0)`) завершались с кодом 0.
+		// Both the clean path and the former drain timeout (`process::exit(0)`) exited with code 0.
 		assert_eq!(RunExit::Ok.code(), 0);
 		assert_eq!(RunExit::DrainTimeout.code(), 0);
 	}
