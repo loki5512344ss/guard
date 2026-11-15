@@ -165,7 +165,35 @@ guard/
       `RunExit`, единственный `process::exit` теперь в `main` бина (clippy там не срабатывает).
 - [x] Флакающий тест `pow_roundtrip::verifier_rejects_garbage_and_replay` (p≈1/16 из-за
       случайного токена) — сидирован, 50 прогонов до (3 fail) / после (0 fail).
-- [ ] IPv6-банов в XDP-putи нет (`ban_cidr` bail'ит на v6) — IPv6-паритет (вывод №8).
+- [x] IPv6-паритет XDP (вывод №8) — сделано (2026-11-15):
+      - [x] **C**: `struct lpm_key6 { u32 prefixlen; u8 addr[16]; }` в `common.h`;
+            `blacklist6_map` (LPM_TRIE, 20-байтный ключ, value `u64` expiry, 100000, NO_PREALLOC) в `maps.h`;
+            в `universal_filter.c` non-mapped IPv6 больше не возвращает PASS раньше времени: общий L4-парсинг +
+            порт-гейт, затем блок `if (native_v6)`: `is_blacklisted6` (lookup `prefixlen=128`,
+            expiry-cleanup как у v4) → DROP; UDP при `G_UDP_POLICY==1` → DROP; `detect_tcp_bypass` → DROP;
+            TCP → `prefix_key_from_v6` + `update_prefix_stats` (оживило мёртвый код, замкнуло
+            детектор подсетей на v6); иначе PASS. Ringbuf-события для v6 не шлём (ABI `src_ip` u32).
+      - [x] **Rust**: `pub fn blacklist6_key(prefix_len: u8, &[u8;16]) -> [u8;20]` (prefixlen LE в 0..4,
+            addr network order в 4..20); `blacklist6_update`; `ban_cidr` матчит V4/V6;
+            `gateway.rs::xdp_ban` → `ban_cidr(ip, 32|128, dur)` для обоих семейств; `ban_ip` удалён
+            (после перевода gateway вызовов не осталось — «мёртвый код = баг»), `noop.rs` синхронизирован.
+      - [x] **Тесты**: `tests/xdp_ban_v6.rs` (layout ключа `/64` и `/128`, network order);
+            `scripts/xdp_ipv6_smoke.sh` — реальный netns+verifier smoke (без бана pass → с баном
+            blacklist+drop → после снятия снова pass), проверен на ядре 7.3.4.
+      - Non-goals (позже): conntrack/throttle/UDP rate-limit (`policy==2`)/RST-challenge для нативного v6
+            (нужны 128-битные flow/throttle-ключи); whitelist6 (у `whitelist_map` нет писателя даже для v4);
+            ringbuf-события для v6; unban v6.
+- [x] **Expiry бана из userspace не работал в ядре** (найден и починен 2026-11-15, касался v4 и v6):
+      `blacklist_expiry_ns` писал `SystemTime` (epoch ns ≈ 1.7e18), а C сравнивает с
+      `bpf_ktime_get_ns()` (monotonic ≈ uptime) — бан жил до перезагрузки. Теперь userspace пишет
+      `CLOCK_MONOTONIC`-ns (`xdp::monotonic_ns`), регрессия — `tests/xdp_ban_clock.rs` и expiry-фаза
+      в `scripts/xdp_ipv6_smoke.sh`.
+- [x] **Короткий L4-хвост обходил blacklist** (найден и починен 2026-11-15, v4 и v6):
+      `universal_filter.c` требовал `sizeof(struct tcphdr)` (20 байт) для всех протоколов, иначе
+      ранний `XDP_PASS` — UDP-датаграмма короче 20 байт не доходила до порт-гейта и blacklist.
+      Теперь минимум считается по протоколу (`sizeof(struct udphdr)` для UDP); регрессия —
+      «короткая датаграмма» в `scripts/xdp_ipv6_smoke.sh`. TCP-путь не изменился: там по-прежнему
+      требуется полный `struct tcphdr`.
 
 ## 3. Backlog
 

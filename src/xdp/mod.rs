@@ -19,9 +19,13 @@ mod filter;
 #[cfg(feature = "xdp")]
 pub use filter::XdpFilter;
 #[cfg(feature = "xdp")]
+pub use filter::blacklist6_key;
+#[cfg(feature = "xdp")]
 pub use filter::events::{
 	AutoBanConfig, BanAction, XDP_EVENT_LEN, XdpEvent, XdpEventKind, auto_ban_decision, parse_xdp_event,
 };
+#[cfg(feature = "xdp")]
+pub use filter::monotonic_ns;
 
 #[cfg(feature = "xdp")]
 pub use probe::XdpMetrics;

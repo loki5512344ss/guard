@@ -202,12 +202,14 @@ impl Gateway {
 		let Some(xdp) = &self.xdp else {
 			return;
 		};
-		let IpAddr::V4(ip_v4) = ip else {
-			return;
-		};
-		match xdp.lock().expect("xdp lock poisoned").ban_ip(ip_v4, duration_secs) {
-			Ok(()) => tracing::debug!("xdp ban {ip_v4} for {duration_secs}s"),
-			Err(e) => tracing::warn!("xdp ban failed for {ip_v4}: {e}"),
+		let prefix_len = if ip.is_ipv4() { 32 } else { 128 };
+		match xdp
+			.lock()
+			.expect("xdp lock poisoned")
+			.ban_cidr(ip, prefix_len, duration_secs)
+		{
+			Ok(()) => tracing::debug!("xdp ban {ip} for {duration_secs}s"),
+			Err(e) => tracing::warn!("xdp ban failed for {ip}: {e}"),
 		}
 	}
 

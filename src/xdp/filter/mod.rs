@@ -16,6 +16,8 @@ mod attach;
 pub(crate) mod events;
 mod maps;
 
+pub use maps::{blacklist6_key, monotonic_ns};
+
 pub struct XdpFilter {
 	obj: Option<Object>,
 	ringbuf: Option<RingBuffer<'static>>,

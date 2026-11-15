@@ -50,6 +50,12 @@ struct lpm_key {
     __u32 ip;
 };
 
+// ── LPM key for IPv6 blacklist (format of bpf_lpm_trie_key, 20 bytes) ──
+struct lpm_key6 {
+    __u32 prefixlen;
+    __u8  addr[16];
+};
+
 // ── Ringbuf event (userspace receives these) ──
 enum event_type {
     EVENT_BAN          = 0,

@@ -11,6 +11,16 @@ struct {
     __uint(map_flags, BPF_F_NO_PREALLOC);
 } blacklist_map SEC(".maps");
 
+// 🔗 IPv6 blacklist (LPM_TRIE, 128-bit prefix keys)
+// Same value/expiry contract as blacklist_map
+struct {
+    __uint(type, BPF_MAP_TYPE_LPM_TRIE);
+    __uint(max_entries, 100000);
+    __type(key, struct lpm_key6);
+    __type(value, __u64);       // ban expiry (ktime_ns)
+    __uint(map_flags, BPF_F_NO_PREALLOC);
+} blacklist6_map SEC(".maps");
+
 // 🔗 Whitelist (LPM_TRIE for CIDR) — checked before any filter
 struct {
     __uint(type, BPF_MAP_TYPE_LPM_TRIE);

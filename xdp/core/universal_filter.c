@@ -72,6 +72,22 @@ static __always_inline __u8 is_blacklisted(__u32 src_ip, __u64 now)
     return 0;
 }
 
+// ── IPv6 blacklist lookup with expiry; removes expired entries ──
+// Key layout mirrors bpf_lpm_trie_key: prefixlen (host order) + 16 addr bytes.
+static __always_inline __u8 is_blacklisted6(const __u8 addr[16], __u64 now)
+{
+    struct lpm_key6 key = {};
+    key.prefixlen = 128;
+    __builtin_memcpy(key.addr, addr, 16);
+    __u64 *ban_until = bpf_map_lookup_elem(&blacklist6_map, &key);
+    if (!ban_until)
+        return 0;
+    if (*ban_until > now)
+        return 1;
+    bpf_map_delete_elem(&blacklist6_map, &key); // expired — clean up
+    return 0;
+}
+
 static __always_inline void ban_ip(__u32 src_ip, __u64 until)
 {
     struct lpm_key key = { .prefixlen = 32, .ip = src_ip };
@@ -127,6 +143,8 @@ int rampart_universal_filter(struct xdp_md *ctx)
     __u32 dst_ip = 0;
     __u8 l4_proto = 0;
     __u8 is_ipv6 = 0;
+    __u8 native_v6 = 0;
+    __u8 src6[16];
 
     if (eth->h_proto == bpf_htons(ETH_P_IP)) {
         struct iphdr *ip = (void *)(eth + 1);
@@ -164,15 +182,19 @@ int rampart_universal_filter(struct xdp_md *ctx)
             ip6->daddr.in6_u.u6_addr32[0] != 0 ||
             ip6->daddr.in6_u.u6_addr32[1] != 0 ||
             ip6->daddr.in6_u.u6_addr32[2] != bpf_htonl(0xFFFF)) {
-            // Non-mapped IPv6 — pass for now (not supported)
-            return XDP_PASS;
+            // Native IPv6 — no 32-bit representable address, handled separately
+            // after the generic L4/port gates; must NOT touch v4 maps.
+            native_v6 = 1;
+            is_ipv6   = 1;
+            l4_proto  = ip6->nexthdr;
+            __builtin_memcpy(src6, &ip6->saddr, 16);
+        } else {
+            // FIX: source address must come from saddr, never daddr
+            src_ip   = ip6->saddr.in6_u.u6_addr32[3];
+            dst_ip   = ip6->daddr.in6_u.u6_addr32[3];
+            l4_proto = ip6->nexthdr;
+            is_ipv6  = 1;
         }
-
-        // FIX: source address must come from saddr, never daddr
-        src_ip   = ip6->saddr.in6_u.u6_addr32[3];
-        dst_ip   = ip6->daddr.in6_u.u6_addr32[3];
-        l4_proto = ip6->nexthdr;
-        is_ipv6  = 1;
     }
 
     // ── Parse L4 header ──
@@ -189,7 +211,13 @@ int rampart_universal_filter(struct xdp_md *ctx)
         ip_hdr_len = ip->ihl * 4;
     }
 
-    if ((void *)l4 + sizeof(struct tcphdr) > data_end)
+    // Minimum L4 header per protocol: a short UDP datagram used to fall through
+    // to XDP_PASS because the check was sized for TCP, letting it bypass the
+    // blacklist entirely. IPv6 native fragmentation is already filtered above
+    // (nexthdr must be TCP/UDP), so a short UDP header here is a real datagram.
+    __u32 min_l4 = (l4_proto == IPPROTO_TCP) ? sizeof(struct tcphdr)
+                                             : sizeof(struct udphdr);
+    if ((void *)l4 + min_l4 > data_end)
         return XDP_PASS;
 
     // ── Port range check (protected services) ──
@@ -208,6 +236,35 @@ int rampart_universal_filter(struct xdp_md *ctx)
         inc_udp();
 
     __u64 now = bpf_ktime_get_ns();
+
+    // ── Native IPv6: blacklist + cheap L4 policy (no stateful v6 yet) ──
+    if (native_v6) {
+        if (is_blacklisted6(src6, now)) {
+            inc_blacklist();
+            inc_drop();
+            return XDP_DROP;
+        }
+        if (l4_proto == IPPROTO_UDP) {
+            if (G_UDP_POLICY == 1) { // drop
+                inc_drop();
+                return XDP_DROP;
+            }
+            inc_pass();
+            return XDP_PASS; // policy 2 (rate-limit) needs a 128-bit key — not supported for v6
+        }
+        // TCP: forged-flag combos are L4-generic, no state needed
+        if (detect_tcp_bypass((struct tcphdr *)l4)) {
+            inc_drop();
+            return XDP_DROP;
+        }
+        // Per-prefix stats (/64) — feeds the subnet detector for IPv6
+        struct prefix_key pkey6;
+        prefix_key_from_v6(&pkey6, src6);
+        struct tcphdr *tcp6 = (struct tcphdr *)l4;
+        update_prefix_stats(&pkey6, (tcp6->syn && !tcp6->ack) ? 1 : 0, now);
+        inc_pass();
+        return XDP_PASS;
+    }
 
     // ── Whitelist check (CIDR) — before any filtering ──
     struct lpm_key wl_key = { .prefixlen = 32, .ip = src_ip };
