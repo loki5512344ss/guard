@@ -4,7 +4,7 @@ mod diagnostics;
 #[cfg(feature = "xdp")]
 pub(crate) use diagnostics::preflight;
 pub use diagnostics::{
-    AttachMode, EnvironmentReport, FilesystemProbe, KernelVersion, MIN_KERNEL, SystemProbe, driver_supports_native_xdp,
+	AttachMode, EnvironmentReport, FilesystemProbe, KernelVersion, MIN_KERNEL, SystemProbe, driver_supports_native_xdp,
 };
 
 mod stats;

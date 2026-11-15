@@ -12,6 +12,6 @@ pub use detect::MinecraftProtocolConfig;
 pub use detect::ProtocolConfig;
 pub use detect::{DetectAlertConfig, DetectAutobanConfig, DetectConfig, DetectPrefixConfig};
 pub use edge::{
-    BackendConfig, BanConfig, BindConfig, LimitsConfig, PowConfig, ProxyProtocolConfig, TrustedProxyCidr, WorkerConfig,
+	BackendConfig, BanConfig, BindConfig, LimitsConfig, PowConfig, ProxyProtocolConfig, TrustedProxyCidr, WorkerConfig,
 };
 pub use platform::{LoggingConfig, MetricsConfig, StoreConfig, XdpConfig};

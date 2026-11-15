@@ -22,24 +22,24 @@ mod proxy;
 
 /// Общее состояние edge-движка, разделяемое между accept-loop'ами.
 pub struct Gateway {
-    pub config: Arc<Config>,
-    pub rate_limiter: Arc<RateLimiter>,
-    pub connection_limiter: ConnectionLimiter,
-    pub blacklist: Arc<Blacklist>,
-    pub adjuster: Arc<Mutex<DifficultyAdjuster>>,
-    pub whitelist: Arc<HashSet<IpAddr>>,
-    pub reputation: Arc<IpReputation>,
-    pub xdp: Option<Arc<Mutex<XdpFilter>>>,
-    pub clickhouse: Option<Arc<TokioMutex<ClickHouseWriter>>>,
-    pub allowed_1s: Arc<AtomicU64>,
-    pub registry: Arc<ProtocolRegistry>,
-    pub subnet_tracker: Option<Arc<SubnetTracker>>,
-    upstream_cursor: AtomicUsize,
+	pub config: Arc<Config>,
+	pub rate_limiter: Arc<RateLimiter>,
+	pub connection_limiter: ConnectionLimiter,
+	pub blacklist: Arc<Blacklist>,
+	pub adjuster: Arc<Mutex<DifficultyAdjuster>>,
+	pub whitelist: Arc<HashSet<IpAddr>>,
+	pub reputation: Arc<IpReputation>,
+	pub xdp: Option<Arc<Mutex<XdpFilter>>>,
+	pub clickhouse: Option<Arc<TokioMutex<ClickHouseWriter>>>,
+	pub allowed_1s: Arc<AtomicU64>,
+	pub registry: Arc<ProtocolRegistry>,
+	pub subnet_tracker: Option<Arc<SubnetTracker>>,
+	upstream_cursor: AtomicUsize,
 }
 
 /// Result of a connection attempt, retaining the verified client identity for
 /// post-connection traffic accounting.
 pub struct GatewayOutcome {
-    pub client_ip: Option<IpAddr>,
-    pub result: anyhow::Result<()>,
+	pub client_ip: Option<IpAddr>,
+	pub result: anyhow::Result<()>,
 }

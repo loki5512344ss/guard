@@ -1,105 +1,105 @@
 use prometheus::{
-    Encoder, IntCounter, IntCounterVec, IntGauge, register_int_counter, register_int_counter_vec, register_int_gauge,
+	Encoder, IntCounter, IntCounterVec, IntGauge, register_int_counter, register_int_counter_vec, register_int_gauge,
 };
 use std::sync::LazyLock;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 
 pub static CONNECTIONS_TOTAL: LazyLock<IntCounterVec> = LazyLock::new(|| {
-    register_int_counter_vec!("rampart_connections_total", "Total connections handled", &["result"])
-        .expect("CONNECTIONS_TOTAL")
+	register_int_counter_vec!("rampart_connections_total", "Total connections handled", &["result"])
+		.expect("CONNECTIONS_TOTAL")
 });
 
 pub static RATE_LIMIT_HITS: LazyLock<IntCounterVec> = LazyLock::new(|| {
-    register_int_counter_vec!("rampart_rate_limit_hits", "Rate limit hits", &["action"]).expect("RATE_LIMIT_HITS")
+	register_int_counter_vec!("rampart_rate_limit_hits", "Rate limit hits", &["action"]).expect("RATE_LIMIT_HITS")
 });
 
 pub static POW_CHALLENGES_TOTAL: LazyLock<IntCounterVec> = LazyLock::new(|| {
-    register_int_counter_vec!("rampart_pow_challenges_total", "PoW challenges issued", &["result"])
-        .expect("POW_CHALLENGES_TOTAL")
+	register_int_counter_vec!("rampart_pow_challenges_total", "PoW challenges issued", &["result"])
+		.expect("POW_CHALLENGES_TOTAL")
 });
 
 pub static POW_CURRENT_DIFFICULTY: LazyLock<IntGauge> = LazyLock::new(|| {
-    register_int_gauge!("rampart_pow_current_difficulty", "Current PoW difficulty").expect("POW_CURRENT_DIFFICULTY")
+	register_int_gauge!("rampart_pow_current_difficulty", "Current PoW difficulty").expect("POW_CURRENT_DIFFICULTY")
 });
 
 pub static ATTACK_STATUS: LazyLock<IntGauge> = LazyLock::new(|| {
-    register_int_gauge!(
-        "rampart_attack_status",
-        "Attack detector status (0=normal, 1=suspicious, 2=under attack)"
-    )
-    .expect("ATTACK_STATUS")
+	register_int_gauge!(
+		"rampart_attack_status",
+		"Attack detector status (0=normal, 1=suspicious, 2=under attack)"
+	)
+	.expect("ATTACK_STATUS")
 });
 
 pub static SUBNET_VERDICTS: LazyLock<IntCounterVec> = LazyLock::new(|| {
-    register_int_counter_vec!(
-        "rampart_subnet_verdicts_total",
-        "Subnet detector verdicts",
-        &["verdict"]
-    )
-    .expect("SUBNET_VERDICTS")
+	register_int_counter_vec!(
+		"rampart_subnet_verdicts_total",
+		"Subnet detector verdicts",
+		&["verdict"]
+	)
+	.expect("SUBNET_VERDICTS")
 });
 
 pub static AUTO_BANS_TOTAL: LazyLock<IntCounterVec> = LazyLock::new(|| {
-    register_int_counter_vec!(
-        "rampart_auto_bans_total",
-        "Auto-bans issued by Traffic Intelligence",
-        &["reason"]
-    )
-    .expect("AUTO_BANS_TOTAL")
+	register_int_counter_vec!(
+		"rampart_auto_bans_total",
+		"Auto-bans issued by Traffic Intelligence",
+		&["reason"]
+	)
+	.expect("AUTO_BANS_TOTAL")
 });
 
 pub static INTEL_RATE_LIMIT_DROPS_TOTAL: LazyLock<IntCounter> = LazyLock::new(|| {
-    register_int_counter!(
-        "rampart_intel_rate_limit_drops_total",
-        "Connections dropped by rate limit"
-    )
-    .expect("INTEL_RATE_LIMIT_DROPS_TOTAL")
+	register_int_counter!(
+		"rampart_intel_rate_limit_drops_total",
+		"Connections dropped by rate limit"
+	)
+	.expect("INTEL_RATE_LIMIT_DROPS_TOTAL")
 });
 
 pub static INTEL_CPS: LazyLock<IntGauge> =
-    LazyLock::new(|| register_int_gauge!("rampart_intel_cps", "New connections per second window").expect("INTEL_CPS"));
+	LazyLock::new(|| register_int_gauge!("rampart_intel_cps", "New connections per second window").expect("INTEL_CPS"));
 
 pub static INTEL_ALERTS_TOTAL: LazyLock<IntCounter> = LazyLock::new(|| {
-    register_int_counter!("rampart_intel_alerts_total", "Attack state-transition alerts emitted")
-        .expect("INTEL_ALERTS_TOTAL")
+	register_int_counter!("rampart_intel_alerts_total", "Attack state-transition alerts emitted")
+		.expect("INTEL_ALERTS_TOTAL")
 });
 
 /// Отдаёт Prometheus-метрики по голому HTTP/0.9-совместимому ответу.
 pub async fn run_metrics_server(addr: &str) {
-    let listener = match TcpListener::bind(addr).await {
-        Ok(l) => l,
-        Err(e) => {
-            tracing::error!("Failed to bind metrics server: {e}");
-            return;
-        },
-    };
-    loop {
-        let (mut stream, _) = match listener.accept().await {
-            Ok(s) => s,
-            Err(e) => {
-                tracing::error!("Metrics accept error: {e}");
-                continue;
-            },
-        };
-        tokio::spawn(async move {
-            let mut buf = [0u8; 1024];
-            if stream.read(&mut buf).await.is_err() {
-                return;
-            }
-            let metric_families = prometheus::gather();
-            let encoder = prometheus::TextEncoder::new();
-            let mut payload = Vec::new();
-            if encoder.encode(&metric_families, &mut payload).is_err() {
-                return;
-            }
-            let header = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: text/plain; version=0.0.4\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-                payload.len()
-            );
-            let mut response = header.into_bytes();
-            response.extend_from_slice(&payload);
-            let _ = stream.write_all(&response).await;
-        });
-    }
+	let listener = match TcpListener::bind(addr).await {
+		Ok(l) => l,
+		Err(e) => {
+			tracing::error!("Failed to bind metrics server: {e}");
+			return;
+		},
+	};
+	loop {
+		let (mut stream, _) = match listener.accept().await {
+			Ok(s) => s,
+			Err(e) => {
+				tracing::error!("Metrics accept error: {e}");
+				continue;
+			},
+		};
+		tokio::spawn(async move {
+			let mut buf = [0u8; 1024];
+			if stream.read(&mut buf).await.is_err() {
+				return;
+			}
+			let metric_families = prometheus::gather();
+			let encoder = prometheus::TextEncoder::new();
+			let mut payload = Vec::new();
+			if encoder.encode(&metric_families, &mut payload).is_err() {
+				return;
+			}
+			let header = format!(
+				"HTTP/1.1 200 OK\r\nContent-Type: text/plain; version=0.0.4\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+				payload.len()
+			);
+			let mut response = header.into_bytes();
+			response.extend_from_slice(&payload);
+			let _ = stream.write_all(&response).await;
+		});
+	}
 }

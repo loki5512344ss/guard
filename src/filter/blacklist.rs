@@ -8,173 +8,173 @@ const LOCAL_BAN_EVENT_CAPACITY: usize = 4096;
 
 #[derive(Clone, Debug)]
 pub struct LocalBanEvent {
-    pub ip: IpAddr,
-    pub expires_at_unix: i64,
-    pub reason: String,
+	pub ip: IpAddr,
+	pub expires_at_unix: i64,
+	pub reason: String,
 }
 
 struct BanEntry {
-    expires: Instant,
-    _reason: String,
+	expires: Instant,
+	_reason: String,
 }
 
 pub struct Blacklist {
-    entries: Arc<DashMap<IpAddr, BanEntry>>,
-    redis_entries: Arc<DashMap<IpAddr, BanEntry>>,
-    local_ban_events: broadcast::Sender<LocalBanEvent>,
+	entries: Arc<DashMap<IpAddr, BanEntry>>,
+	redis_entries: Arc<DashMap<IpAddr, BanEntry>>,
+	local_ban_events: broadcast::Sender<LocalBanEvent>,
 }
 
 impl Default for Blacklist {
-    fn default() -> Self {
-        Self::new()
-    }
+	fn default() -> Self {
+		Self::new()
+	}
 }
 
 impl Blacklist {
-    pub fn new() -> Self {
-        let (local_ban_events, _) = broadcast::channel(LOCAL_BAN_EVENT_CAPACITY);
-        Self {
-            entries: Arc::new(DashMap::new()),
-            redis_entries: Arc::new(DashMap::new()),
-            local_ban_events,
-        }
-    }
+	pub fn new() -> Self {
+		let (local_ban_events, _) = broadcast::channel(LOCAL_BAN_EVENT_CAPACITY);
+		Self {
+			entries: Arc::new(DashMap::new()),
+			redis_entries: Arc::new(DashMap::new()),
+			local_ban_events,
+		}
+	}
 
-    pub fn is_blocked(&self, ip: IpAddr) -> bool {
-        Self::is_blocked_in(&self.entries, ip) || Self::is_blocked_in(&self.redis_entries, ip)
-    }
+	pub fn is_blocked(&self, ip: IpAddr) -> bool {
+		Self::is_blocked_in(&self.entries, ip) || Self::is_blocked_in(&self.redis_entries, ip)
+	}
 
-    pub fn add(&self, ip: IpAddr, duration: Duration, reason: &str) {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
-        let expires_at_unix = now.saturating_add(duration.as_secs()).min(i64::MAX as u64) as i64;
-        self.entries.insert(
-            ip,
-            BanEntry {
-                expires: Instant::now() + duration,
-                _reason: reason.to_string(),
-            },
-        );
-        let _ = self.local_ban_events.send(LocalBanEvent {
-            ip,
-            expires_at_unix,
-            reason: reason.to_string(),
-        });
-    }
+	pub fn add(&self, ip: IpAddr, duration: Duration, reason: &str) {
+		let now = std::time::SystemTime::now()
+			.duration_since(std::time::UNIX_EPOCH)
+			.unwrap_or_default()
+			.as_secs();
+		let expires_at_unix = now.saturating_add(duration.as_secs()).min(i64::MAX as u64) as i64;
+		self.entries.insert(
+			ip,
+			BanEntry {
+				expires: Instant::now() + duration,
+				_reason: reason.to_string(),
+			},
+		);
+		let _ = self.local_ban_events.send(LocalBanEvent {
+			ip,
+			expires_at_unix,
+			reason: reason.to_string(),
+		});
+	}
 
-    pub fn subscribe_local_bans(&self) -> broadcast::Receiver<LocalBanEvent> {
-        self.local_ban_events.subscribe()
-    }
+	pub fn subscribe_local_bans(&self) -> broadcast::Receiver<LocalBanEvent> {
+		self.local_ban_events.subscribe()
+	}
 
-    pub fn local_snapshot(&self) -> Vec<LocalBanEvent> {
-        self.entries
-            .iter()
-            .filter(|entry| entry.expires > Instant::now())
-            .map(|entry| LocalBanEvent {
-                ip: *entry.key(),
-                expires_at_unix: std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_secs()
-                    .saturating_add(entry.expires.saturating_duration_since(Instant::now()).as_secs())
-                    .min(i64::MAX as u64) as i64,
-                reason: entry._reason.clone(),
-            })
-            .collect()
-    }
+	pub fn local_snapshot(&self) -> Vec<LocalBanEvent> {
+		self.entries
+			.iter()
+			.filter(|entry| entry.expires > Instant::now())
+			.map(|entry| LocalBanEvent {
+				ip: *entry.key(),
+				expires_at_unix: std::time::SystemTime::now()
+					.duration_since(std::time::UNIX_EPOCH)
+					.unwrap_or_default()
+					.as_secs()
+					.saturating_add(entry.expires.saturating_duration_since(Instant::now()).as_secs())
+					.min(i64::MAX as u64) as i64,
+				reason: entry._reason.clone(),
+			})
+			.collect()
+	}
 
-    pub fn remove(&self, ip: IpAddr) {
-        self.entries.remove(&ip);
-    }
+	pub fn remove(&self, ip: IpAddr) {
+		self.entries.remove(&ip);
+	}
 
-    pub fn add_redis(&self, ip: IpAddr, duration: Duration, reason: &str) {
-        self.redis_entries.insert(
-            ip,
-            BanEntry {
-                expires: Instant::now() + duration,
-                _reason: reason.to_string(),
-            },
-        );
-    }
+	pub fn add_redis(&self, ip: IpAddr, duration: Duration, reason: &str) {
+		self.redis_entries.insert(
+			ip,
+			BanEntry {
+				expires: Instant::now() + duration,
+				_reason: reason.to_string(),
+			},
+		);
+	}
 
-    pub fn remove_redis(&self, ip: IpAddr) {
-        self.redis_entries.remove(&ip);
-    }
+	pub fn remove_redis(&self, ip: IpAddr) {
+		self.redis_entries.remove(&ip);
+	}
 
-    /// Replace Redis-managed bans while preserving local detector bans.
-    pub fn replace_redis<I>(&self, entries: I)
-    where
-        I: IntoIterator<Item = (IpAddr, Duration, String)>,
-    {
-        self.redis_entries.clear();
-        for (ip, duration, reason) in entries {
-            self.add_redis(ip, duration, &reason);
-        }
-    }
+	/// Replace Redis-managed bans while preserving local detector bans.
+	pub fn replace_redis<I>(&self, entries: I)
+	where
+		I: IntoIterator<Item = (IpAddr, Duration, String)>,
+	{
+		self.redis_entries.clear();
+		for (ip, duration, reason) in entries {
+			self.add_redis(ip, duration, &reason);
+		}
+	}
 
-    pub fn len(&self) -> usize {
-        self.entries.len() + self.redis_entries.len()
-    }
+	pub fn len(&self) -> usize {
+		self.entries.len() + self.redis_entries.len()
+	}
 
-    pub fn is_empty(&self) -> bool {
-        self.entries.is_empty() && self.redis_entries.is_empty()
-    }
+	pub fn is_empty(&self) -> bool {
+		self.entries.is_empty() && self.redis_entries.is_empty()
+	}
 
-    pub fn clear_expired(&self) {
-        self.entries.retain(|_, entry| entry.expires > Instant::now());
-        self.redis_entries.retain(|_, entry| entry.expires > Instant::now());
-    }
+	pub fn clear_expired(&self) {
+		self.entries.retain(|_, entry| entry.expires > Instant::now());
+		self.redis_entries.retain(|_, entry| entry.expires > Instant::now());
+	}
 
-    fn is_blocked_in(entries: &DashMap<IpAddr, BanEntry>, ip: IpAddr) -> bool {
-        if let Some(entry) = entries.get(&ip) {
-            if entry.expires > Instant::now() {
-                return true;
-            }
-            drop(entry);
-            entries.remove(&ip);
-        }
-        false
-    }
+	fn is_blocked_in(entries: &DashMap<IpAddr, BanEntry>, ip: IpAddr) -> bool {
+		if let Some(entry) = entries.get(&ip) {
+			if entry.expires > Instant::now() {
+				return true;
+			}
+			drop(entry);
+			entries.remove(&ip);
+		}
+		false
+	}
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use std::net::{IpAddr, Ipv4Addr};
+	use super::*;
+	use std::net::{IpAddr, Ipv4Addr};
 
-    fn ip(octets: [u8; 4]) -> IpAddr {
-        IpAddr::V4(Ipv4Addr::from(octets))
-    }
+	fn ip(octets: [u8; 4]) -> IpAddr {
+		IpAddr::V4(Ipv4Addr::from(octets))
+	}
 
-    #[test]
-    fn test_blacklist_block() {
-        let bl = Blacklist::new();
-        bl.add(ip([1, 2, 3, 4]), Duration::from_secs(60), "test");
-        assert!(bl.is_blocked(ip([1, 2, 3, 4])));
-    }
+	#[test]
+	fn test_blacklist_block() {
+		let bl = Blacklist::new();
+		bl.add(ip([1, 2, 3, 4]), Duration::from_secs(60), "test");
+		assert!(bl.is_blocked(ip([1, 2, 3, 4])));
+	}
 
-    #[test]
-    fn test_blacklist_not_blocked() {
-        let bl = Blacklist::new();
-        bl.add(ip([1, 2, 3, 4]), Duration::from_secs(60), "test");
-        assert!(!bl.is_blocked(ip([5, 6, 7, 8])));
-    }
+	#[test]
+	fn test_blacklist_not_blocked() {
+		let bl = Blacklist::new();
+		bl.add(ip([1, 2, 3, 4]), Duration::from_secs(60), "test");
+		assert!(!bl.is_blocked(ip([5, 6, 7, 8])));
+	}
 
-    #[test]
-    fn test_blacklist_expired() {
-        let bl = Blacklist::new();
-        bl.add(ip([1, 2, 3, 4]), Duration::from_millis(1), "test");
-        std::thread::sleep(Duration::from_millis(2));
-        assert!(!bl.is_blocked(ip([1, 2, 3, 4])));
-    }
+	#[test]
+	fn test_blacklist_expired() {
+		let bl = Blacklist::new();
+		bl.add(ip([1, 2, 3, 4]), Duration::from_millis(1), "test");
+		std::thread::sleep(Duration::from_millis(2));
+		assert!(!bl.is_blocked(ip([1, 2, 3, 4])));
+	}
 
-    #[test]
-    fn test_blacklist_remove() {
-        let bl = Blacklist::new();
-        bl.add(ip([1, 2, 3, 4]), Duration::from_secs(60), "test");
-        bl.remove(ip([1, 2, 3, 4]));
-        assert!(!bl.is_blocked(ip([1, 2, 3, 4])));
-    }
+	#[test]
+	fn test_blacklist_remove() {
+		let bl = Blacklist::new();
+		bl.add(ip([1, 2, 3, 4]), Duration::from_secs(60), "test");
+		bl.remove(ip([1, 2, 3, 4]));
+		assert!(!bl.is_blocked(ip([1, 2, 3, 4])));
+	}
 }
