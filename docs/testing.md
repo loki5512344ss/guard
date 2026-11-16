@@ -31,6 +31,14 @@ cargo clippy --all-targets --all-features -- -D warnings
 cargo deny check
 ```
 
+E2E-сценарии живут в `tests/edge_e2e.rs`: реальный TCP-клиент через продакшн-accept-loop и
+pipeline до upstream на loopback (обычный HTTP, PoW с решённым и неверным nonce, rate-limit,
+blacklist). Root и внешняя сеть не нужны, каждый тест укладывается в 5 с:
+
+```bash
+cargo test --all-features --test edge_e2e
+```
+
 XDP: smoke-check компиляции BPF-программы:
 
 ```bash
