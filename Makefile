@@ -3,7 +3,7 @@
 CARGO = cargo
 TARGET_DIR = target
 
-.PHONY: all build release test test-all check check-all fmt fmt-check clippy clean deny audit
+.PHONY: all build release test test-all check check-all fmt fmt-check clippy clean deny audit fuzz
 .PHONY: ebpf ebpf-clean
 .PHONY: docker docker-build docker-up docker-down docker-logs
 .PHONY: ci ci-full repo-gates
@@ -77,6 +77,12 @@ docker-logs:
 
 checkstyle: fmt-check clippy
 	@echo "✓ Checkstyle passed (rustfmt + clippy)"
+
+# Parser fuzzing (nightly + cargo-fuzz). 60 s per target is a smoke run;
+# longer campaigns are run locally before a release.
+fuzz:
+	cargo +nightly fuzz run http_head fuzz/seeds/http_head -- -max_total_time=60
+	cargo +nightly fuzz run proxy_v2 -- -max_total_time=60
 
 repo-gates:
 	bash scripts/check_module_size.sh

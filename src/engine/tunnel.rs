@@ -22,7 +22,7 @@ mod gateway;
 #[cfg(feature = "protocol-minecraft")]
 mod proxy;
 #[cfg(feature = "protocol-minecraft")]
-pub use proxy::{ClientIpRejection, validate_client_ip};
+pub use proxy::{ClientIpRejection, parse_v2_header, validate_client_ip};
 
 /// Multiplier applied to the per-IP limit when sizing the global connection
 /// budget: `4 x workers x max_connections_per_ip` in-flight connections.

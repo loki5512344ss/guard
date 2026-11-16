@@ -1,0 +1,29 @@
+[package]
+name = "rampart-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+rampart = { path = "..", default-features = false, features = ["protocol-http", "protocol-minecraft"] }
+
+[[bin]]
+name = "http_head"
+path = "fuzz_targets/http_head.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "proxy_v2"
+path = "fuzz_targets/proxy_v2.rs"
+test = false
+doc = false
+bench = false
+
+# Isolate the fuzz crate from the parent package.
+[workspace]

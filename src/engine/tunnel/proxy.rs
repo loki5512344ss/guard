@@ -6,7 +6,8 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::time::Duration;
 use tokio::net::TcpStream;
 
-mod inbound;
+pub mod inbound;
+pub use inbound::parse_v2_header;
 pub(super) use inbound::read_v2_header;
 
 /// Reason a PROXY header client address is rejected as an identity.

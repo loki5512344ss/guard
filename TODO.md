@@ -285,7 +285,13 @@ module-size, secrets, `cargo deny`, rustdoc без warning'ов, clang+verifier,
 - `doctor` не дёргает защищённые ручки без токена и возвращает ненулевой код при провале.
 - Инлайн-тесты: 25 → 10 файлов (остальные — в следующих итерациях).
 
-### Осталось (следующий раунд)
+### Осталось
+
+- [ ] Monitor (`add_cidr`) и `traffic/hook` autoban не сверяются с `trusted_cidrs`: если
+      доверенный прокси физически живёт в банимой подсети, его адрес может попасть под
+      префиксный бан. Нужна общая проверка перед любым баном.
+
+### Сделано в этом раунде
 
 - [x] API manager'а: `SCAN`+`MGET` вместо `KEYS`/N+1, 503 вместо `200 []`, пагинация
       `limit`/`offset` (100 по умолчанию, 1000 максимум), GET без записи (бэкфилл метаданных
@@ -293,12 +299,12 @@ module-size, secrets, `cargo deny`, rustdoc без warning'ов, clang+verifier,
       на все мутирующие ручки, graceful shutdown с SIGTERM и join heartbeat, эвикция
       login-лимитера, `MANAGER_TRUSTED_PROXIES` для `X-Forwarded-For`. Тесты —
       `tests/manager_api.rs` (9) и `tests/manager_security.rs` (23).
-- [ ] `trusted_cidrs` + PROXY-header IP как ключ всех политик: банить/лимитировать по
-      transport-IP, header-IP — только после валидации (ban-amplification через LB).
-
-- [ ] IPv6 bind в listener (`Domain::IPV4` + строковый парсинг адреса).
-- [ ] `relay_idle_timeout_secs` в `[limits]` (сейчас константа 300 с) и семафор бюджета
-      полем `Gateway` вместо `OnceLock`.
+- [x] PROXY-header IP валидируется (loopback/link-local/multicast/broadcast/unspecified и
+      адреса из `trusted_cidrs` отклоняются, mapped-IPv4 нормализуется), баны для адресов из
+      `trusted_cidrs` подавляются; невалидный заголовок → transport-peer.
+- [x] IPv6 bind в listener (парсинг `IpAddr`, домен по семейству, dual-stack для `::`).
+- [x] `limits.relay_idle_timeout_secs` (300 по умолчанию, 1..=86400) и семафор бюджета полем
+      `Gateway` вместо `OnceLock`.
 - [x] Инлайн-тесты мигрированы: `grep -rn "#\[cfg(test)\]" src/` пуст, 41 тест переехал в
       10 новых сюит (`manager_auth`, `manager_heartbeat`, `protocol_http_*`, `traffic_*`,
       `tui_prometheus`); счётчик тестов не изменился.
@@ -314,7 +320,9 @@ module-size, secrets, `cargo deny`, rustdoc без warning'ов, clang+verifier,
 - [ ] Bloom filter для blacklist
 - [ ] io_uring runtime (feature flag)
 - [ ] ML anomaly detection (Isolation Forest)
-- [ ] Fuzzing парсеров (`cargo-fuzz`)
+- [x] Fuzzing парсеров (`cargo-fuzz`): цели `http_head` и `proxy_v2` в `fuzz/`, сиды в
+      `fuzz/seeds/`, запуск `make fuzz` (nightly); PROXY v2-парсер стал чистой функцией
+      `parse_v2_header` + 10 интеграционных тестов на обрезку/TLV/семейства.
 - [ ] BGP Anycast (AS + /24)
 
 ---

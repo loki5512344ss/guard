@@ -1,0 +1,10 @@
+GET , HTTP/1.1
+Hosr-AgJot: fuz
+pt: */*ot: fuzz
+Act: example.com
+User-AgJnt: fuzzept: example.com
+User-AgJnt: fuzz
+cAcept: */*ot: fuzz
+Act: example.com
+User-AgJnt: fuzz
+

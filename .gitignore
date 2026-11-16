@@ -45,3 +45,8 @@ Thumbs.db
 
 # Reference projects (cloned for research)
 ref/
+
+# cargo-fuzz
+fuzz/corpus/
+fuzz/artifacts/
+fuzz/coverage/

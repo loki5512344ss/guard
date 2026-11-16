@@ -1,0 +1,12 @@
+GET / HTTP/1.1
+Host: exampl
+UsermgJAKt: fl
+UsermgJAKt: fuzz:ET / HTTP/1.1
+Host: exampl
+UsermgJAKt: fl
+UsermgJAKt: fuzl
+UsermgJAKt: fl
+UsermgJAKt: fuzmpl
+UsermgJAKt: fl
+UsermgJAKt: f* */*
+

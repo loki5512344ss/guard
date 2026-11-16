@@ -62,6 +62,35 @@ TCP-payload по `ip->tot_len`), VLAN/QinQ-теги и фрагменты — з
 
 ---
 
+## 3. Fuzzing
+
+Внешние парсеры (HTTP request-head и PROXY protocol v2) фаззятся через `cargo-fuzz`.
+Нужен nightly-тулчейн и установленный `cargo-fuzz`:
+
+```bash
+rustup toolchain install nightly
+cargo install cargo-fuzz
+
+# короткий прогон (60 с на цель), как в CI-смоуке
+make fuzz
+
+# длительная кампания локально
+cargo +nightly fuzz run http_head fuzz/seeds/http_head -- -max_total_time=600
+cargo +nightly fuzz run proxy_v2 -- -max_total_time=600
+```
+
+Найденный краш сохраняется в `fuzz/artifacts/<target>/`; воспроизведение —
+`cargo +nightly fuzz run <target> fuzz/artifacts/<target>/<file>`. Цели лежат в
+`fuzz/fuzz_targets/`, сиды — в `fuzz/seeds/` (каталоги `corpus/`, `artifacts/`
+в git не попадают).
+
+Инварианты, которые проверяют цели: парсер не паникует на произвольных байтах,
+`scan_head` не выходит за буфер, `parse_v2_header` не потребляет больше
+переданного и не принимает заголовок выше лимита, семейство адреса совпадает с
+байтом family.
+
+---
+
 ## 3. Локальный integration-стенд (Docker)
 
 ```bash

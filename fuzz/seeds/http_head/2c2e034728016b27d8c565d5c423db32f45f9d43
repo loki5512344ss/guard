@@ -1,0 +1,13 @@
+GET / HTTP/1.1
+H-ot:
+Act*/*1
+H
+Co-t:*/*1
+H
+:
+
+AP/1.1
+H-o:
+ 0
+
+e

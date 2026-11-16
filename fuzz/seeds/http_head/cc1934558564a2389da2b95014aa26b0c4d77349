@@ -1,0 +1,15 @@
+GET / HTTP/1.1
+Hst: exampl
+User-gJAKt: fuzzexampl
+User-gJZKt:cc0t:-Aost: exampl
+User-gJAKt: fuzzexampl
+User-gJZKt:cc0t:-ET / HTTP/1.1
+Hst: exampl
+User-gJAKt: fuzzexampl
+User-gJZKt:cc0t:-Aost: exampl
+User-gJAKt: fuzzexampl
+User-gJZKt:cc0t:-Ag */*
+
+POSTAg */*
+
+POST/
