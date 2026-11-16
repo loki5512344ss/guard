@@ -1,12 +1,16 @@
+//! `GET /api/v1/servers`: backend servers from the Redis registry keys.
+
 #[cfg(feature = "store-redis")]
 use crate::manager::AppState;
 #[cfg(feature = "store-redis")]
-use axum::{Json, extract::State};
-#[cfg(feature = "store-redis")]
-use redis::AsyncCommands;
+use axum::{Json, extract::State, http::StatusCode};
 use serde::{Deserialize, Serialize};
 #[cfg(feature = "store-redis")]
 use std::sync::Arc;
+
+/// SCAN pattern of server records.
+#[cfg(feature = "store-redis")]
+const SERVERS_PATTERN: &str = "rampart:servers:*";
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ServerEntry {
@@ -23,27 +27,24 @@ pub struct ServersResponse {
 	pub servers: Vec<ServerEntry>,
 }
 
+/// Lists the registry with SCAN and batched MGET reads.
+///
+/// # Errors
+/// Returns 503 when Redis is unreachable or a command fails; an empty `servers`
+/// array then always means a healthy but empty registry.
 #[cfg(feature = "store-redis")]
-pub async fn list_servers(State(state): State<Arc<AppState>>) -> Json<ServersResponse> {
-	let mut conn = match state.redis_client.get_multiplexed_async_connection().await {
-		Ok(c) => c,
-		Err(_) => return Json(ServersResponse { servers: vec![] }),
-	};
-
-	let keys: Vec<String> = match redis::cmd("KEYS").arg("rampart:servers:*").query_async(&mut conn).await {
-		Ok(k) => k,
-		Err(_) => return Json(ServersResponse { servers: vec![] }),
-	};
-
-	let mut servers = Vec::with_capacity(keys.len());
-	for key in &keys {
-		let raw: Option<String> = conn.get(key).await.unwrap_or(None);
-		if let Some(json) = raw
-			&& let Ok(server) = serde_json::from_str::<ServerEntry>(&json)
-		{
-			servers.push(server);
-		}
-	}
-
-	Json(ServersResponse { servers })
+pub async fn list_servers(
+	State(state): State<Arc<AppState>>,
+) -> Result<Json<ServersResponse>, (StatusCode, Json<serde_json::Value>)> {
+	let mut conn = state
+		.redis_client
+		.get_multiplexed_async_connection()
+		.await
+		.map_err(|error| super::unavailable(&error))?;
+	let values = super::scan_values(&mut conn, SERVERS_PATTERN)
+		.await
+		.map_err(|error| super::unavailable(&error))?;
+	Ok(Json(ServersResponse {
+		servers: super::decode_all(&values),
+	}))
 }

@@ -2110,6 +2110,7 @@ dependencies = [
  "tokio",
  "tokio-splice",
  "toml",
+ "tower",
  "tower-http 0.7.1",
  "tracing",
  "tracing-subscriber",
@@ -3201,8 +3202,10 @@ dependencies = [
  "bitflags 2.13.2",
  "bytes",
  "http",
+ "http-body",
  "percent-encoding",
  "pin-project-lite",
+ "tokio",
  "tower-layer",
  "tower-service",
 ]

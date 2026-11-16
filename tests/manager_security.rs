@@ -3,10 +3,14 @@
 //! Regression tests for the authentication bypass where an empty
 //! `API_PASSWORD` matched an empty login (`verify_password("", "")`).
 
+use axum::http::HeaderValue;
 use dashmap::DashMap;
-use rampart::manager::api::auth::allow_login_attempt;
-use rampart::manager::security::{CorsPolicy, validate_api_password, validate_jwt_secret, verify_password};
+use rampart::manager::api::auth::{allow_login_attempt, reset_login_attempts};
+use rampart::manager::api::guard::limit::{LOGIN_MAX_ATTEMPTS, check_attempt, evict_idle};
+use rampart::manager::api::guard::proxy::TrustedProxies;
+use rampart::manager::security::{CorsPolicy, IpNet, validate_api_password, validate_jwt_secret, verify_password};
 use std::net::IpAddr;
+use std::time::Duration;
 
 const STRONG_PASSWORD: &str = "correct-horse-battery-staple";
 const STRONG_SECRET: &str = "0123456789abcdef0123456789abcdef";
@@ -121,4 +125,125 @@ fn login_limiter_blocks_after_five_attempts() {
 		assert!(allow_login_attempt(&limiter, ip));
 	}
 	assert!(!allow_login_attempt(&limiter, ip));
+}
+
+#[test]
+fn successful_login_resets_the_counter() {
+	let limiter = DashMap::new();
+	let ip = IpAddr::from([127, 0, 0, 1]);
+	for _ in 0..LOGIN_MAX_ATTEMPTS {
+		assert!(allow_login_attempt(&limiter, ip));
+	}
+	assert!(!allow_login_attempt(&limiter, ip));
+
+	reset_login_attempts(&limiter, ip);
+	for _ in 0..LOGIN_MAX_ATTEMPTS {
+		assert!(
+			allow_login_attempt(&limiter, ip),
+			"a successful login must give a fresh budget"
+		);
+	}
+}
+
+#[test]
+fn idle_limiter_entries_are_evicted() {
+	let limiter = DashMap::new();
+	let first = IpAddr::from([127, 0, 0, 1]);
+	let second = IpAddr::from([127, 0, 0, 2]);
+	assert!(check_attempt(&limiter, first, Duration::from_secs(60), 5));
+	assert!(check_attempt(&limiter, second, Duration::from_secs(60), 5));
+
+	evict_idle(&limiter, Duration::from_secs(600));
+	assert_eq!(limiter.len(), 2, "a live window must survive the sweep");
+
+	evict_idle(&limiter, Duration::ZERO);
+	assert!(limiter.is_empty(), "expired counters must not accumulate forever");
+}
+
+#[test]
+fn forwarded_for_is_ignored_from_an_untrusted_peer() {
+	let proxies = TrustedProxies::parse("10.0.0.0/8").expect("network must parse");
+	let peer: IpAddr = "203.0.113.7".parse().expect("peer must parse");
+	let forwarded = HeaderValue::from_static("198.51.100.9");
+	assert_eq!(proxies.client_ip(peer, Some(&forwarded)), peer);
+}
+
+#[test]
+fn forwarded_for_is_used_from_a_trusted_peer() {
+	let proxies = TrustedProxies::parse("10.0.0.0/8,2001:db8::/32").expect("networks must parse");
+	let peer: IpAddr = "10.1.2.3".parse().expect("peer must parse");
+	let forwarded = HeaderValue::from_static("203.0.113.9");
+	assert_eq!(
+		proxies.client_ip(peer, Some(&forwarded)),
+		"203.0.113.9".parse::<IpAddr>().expect("client must parse")
+	);
+	let v6_peer: IpAddr = "2001:db8::5".parse().expect("peer must parse");
+	assert_eq!(
+		proxies.client_ip(v6_peer, Some(&forwarded)),
+		"203.0.113.9".parse::<IpAddr>().expect("client must parse")
+	);
+}
+
+#[test]
+fn forwarded_chain_is_walked_right_to_left() {
+	let proxies = TrustedProxies::parse("10.0.0.0/8").expect("network must parse");
+	let peer: IpAddr = "10.1.2.3".parse().expect("peer must parse");
+
+	let chain = HeaderValue::from_static("203.0.113.9, 10.9.9.9");
+	assert_eq!(
+		proxies.client_ip(peer, Some(&chain)),
+		"203.0.113.9".parse::<IpAddr>().expect("client must parse")
+	);
+
+	// The leftmost entry is client supplied: the nearest untrusted hop wins.
+	let spoofed = HeaderValue::from_static("1.2.3.4, 198.51.100.7");
+	assert_eq!(
+		proxies.client_ip(peer, Some(&spoofed)),
+		"198.51.100.7".parse::<IpAddr>().expect("client must parse")
+	);
+}
+
+#[test]
+fn malformed_forwarded_chain_falls_back_to_the_peer() {
+	let proxies = TrustedProxies::parse("10.0.0.0/8").expect("network must parse");
+	let peer: IpAddr = "10.1.2.3".parse().expect("peer must parse");
+	assert_eq!(proxies.client_ip(peer, None), peer);
+	let garbage = HeaderValue::from_static("not-an-address");
+	assert_eq!(proxies.client_ip(peer, Some(&garbage)), peer);
+}
+
+#[test]
+fn trusted_proxy_list_rejects_malformed_entries() {
+	assert!(
+		!TrustedProxies::parse("")
+			.expect("empty is valid")
+			.is_trusted("10.0.0.1".parse().expect("ip"))
+	);
+	assert!(TrustedProxies::parse("10.0.0.0/8,").is_err());
+	assert!(TrustedProxies::parse("10.0.0.0/33").is_err());
+	assert!(TrustedProxies::parse("not-a-network").is_err());
+	assert!(TrustedProxies::parse("::/129").is_err());
+}
+
+#[test]
+fn ip_net_matches_the_configured_prefix() {
+	let network = IpNet::parse("192.168.1.0/24").expect("network must parse");
+	assert!(network.contains("192.168.1.200".parse().expect("ip")));
+	assert!(!network.contains("192.168.2.1".parse().expect("ip")));
+	assert!(!network.contains("::ffff:192.168.1.1".parse().expect("ip")));
+
+	let host = IpNet::parse("192.168.1.5").expect("host route must parse");
+	assert!(host.contains("192.168.1.5".parse().expect("ip")));
+	assert!(!host.contains("192.168.1.6".parse().expect("ip")));
+
+	let v6 = IpNet::parse("2001:db8::/32").expect("network must parse");
+	assert!(v6.contains("2001:db8::1".parse().expect("ip")));
+	assert!(!v6.contains("2001:db9::1".parse().expect("ip")));
+
+	assert!(
+		IpNet::parse("0.0.0.0/0")
+			.expect("default route must parse")
+			.contains("203.0.113.1".parse().expect("ip"))
+	);
+	assert!(IpNet::parse("bad").is_err());
 }

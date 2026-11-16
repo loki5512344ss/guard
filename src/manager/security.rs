@@ -7,8 +7,9 @@
 //! `CORS_ORIGIN` value instead of silently allowing every origin.
 
 use anyhow::{Result, bail};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use subtle::ConstantTimeEq;
-use tower_http::cors::{AllowOrigin, Any, CorsLayer};
+use tower_http::cors::{AllowOrigin, CorsLayer};
 
 /// Minimum length of `API_PASSWORD` in characters.
 const MIN_API_PASSWORD_CHARS: usize = 16;
@@ -117,19 +118,95 @@ impl CorsPolicy {
 
 	/// Builds the axum CORS layer for this policy.
 	///
+	/// The layer only configures origins, methods and headers, so a browser
+	/// preflight reaches the same endpoints the API documents. It does not
+	/// enable credentials: the manager authenticates with a bearer token.
+	///
 	/// Returns `None` for [`CorsPolicy::Deny`] so the router is served without
 	/// any cross-origin layer.
 	#[must_use]
 	pub fn cors_layer(&self) -> Option<CorsLayer> {
-		match self {
-			Self::Deny => None,
-			Self::Any => Some(CorsLayer::new().allow_origin(Any)),
+		let origin = match self {
+			Self::Deny => return None,
+			Self::Any => AllowOrigin::any(),
 			Self::AllowList(origins) => {
 				let allowed = origins
 					.iter()
 					.filter_map(|origin| axum::http::HeaderValue::from_str(origin).ok());
-				Some(CorsLayer::new().allow_origin(AllowOrigin::list(allowed)))
+				AllowOrigin::list(allowed)
 			},
+		};
+		Some(
+			CorsLayer::new()
+				.allow_origin(origin)
+				.allow_methods([
+					axum::http::Method::GET,
+					axum::http::Method::POST,
+					axum::http::Method::DELETE,
+				])
+				.allow_headers([axum::http::header::AUTHORIZATION, axum::http::header::CONTENT_TYPE]),
+		)
+	}
+}
+
+/// An IPv4 or IPv6 network in CIDR notation.
+///
+/// A bare address parses as a host route (`/32` or `/128`). Used for the
+/// `MANAGER_TRUSTED_PROXIES` policy, where a too-broad entry would let a
+/// client spoof its address through `X-Forwarded-For`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct IpNet {
+	addr: IpAddr,
+	prefix: u8,
+}
+
+impl IpNet {
+	/// Parses `10.0.0.0/8`, `2001:db8::/32` or a bare address.
+	///
+	/// # Errors
+	/// Fails when the address or the prefix is malformed, and when the prefix
+	/// length exceeds the address width (32 or 128 bits).
+	pub fn parse(value: &str) -> Result<Self> {
+		let value = value.trim();
+		let (addr, prefix) = match value.split_once('/') {
+			Some((addr, prefix)) => (addr, Some(prefix)),
+			None => (value, None),
+		};
+		let addr: IpAddr = addr
+			.parse()
+			.map_err(|_| anyhow::anyhow!("'{value}' is not an IP address or CIDR network"))?;
+		let width = if addr.is_ipv4() { 32 } else { 128 };
+		let prefix = match prefix {
+			Some(prefix) => prefix
+				.parse::<u8>()
+				.map_err(|_| anyhow::anyhow!("'{value}' has an invalid prefix length"))?,
+			None => width,
+		};
+		if prefix > width {
+			bail!("'{value}' prefix length exceeds the {width}-bit address width");
+		}
+		Ok(Self { addr, prefix })
+	}
+
+	/// Reports whether `ip` belongs to this network.
+	#[must_use]
+	pub fn contains(&self, ip: IpAddr) -> bool {
+		match (self.addr, ip) {
+			(IpAddr::V4(net), IpAddr::V4(ip)) => mask_v4(net, self.prefix) == mask_v4(ip, self.prefix),
+			(IpAddr::V6(net), IpAddr::V6(ip)) => mask_v6(net, self.prefix) == mask_v6(ip, self.prefix),
+			_ => false,
 		}
 	}
+}
+
+/// Returns the network bits of `addr`; a zero prefix masks everything.
+fn mask_v4(addr: Ipv4Addr, prefix: u8) -> u32 {
+	let shift = u32::from(32_u8.saturating_sub(prefix));
+	u32::from(addr) & u32::MAX.checked_shl(shift).unwrap_or(0)
+}
+
+/// Returns the network bits of `addr`; a zero prefix masks everything.
+fn mask_v6(addr: Ipv6Addr, prefix: u8) -> u128 {
+	let shift = u32::from(128_u8.saturating_sub(prefix));
+	u128::from(addr) & u128::MAX.checked_shl(shift).unwrap_or(0)
 }

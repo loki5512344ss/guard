@@ -1,6 +1,9 @@
+//! `POST`/`DELETE /api/v1/blacklist`: validated ban and unban mutations.
+
 use super::common::{
 	ADD_BAN_SCRIPT, BLACKLIST_CHANNEL, BLACKLIST_KEY, BLACKLIST_METADATA_KEY, DEFAULT_BAN_DURATION_SECS,
-	MAX_BAN_DURATION_SECS, REMOVE_BAN_SCRIPT, api_error, event_payload, parse_ip, redis_error, redis_unavailable,
+	MAX_BAN_DURATION_SECS, REMOVE_BAN_SCRIPT, api_error, event_payload, redis_error, redis_unavailable,
+	validate_reason, validate_target,
 };
 use super::{AddBlacklistRequest, RemoveBlacklistRequest};
 use crate::manager::AppState;
@@ -11,7 +14,8 @@ pub async fn add_blacklist(
 	State(state): State<Arc<AppState>>,
 	Json(req): Json<AddBlacklistRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-	let ip = parse_ip(&req.target)?;
+	let ip = validate_target(&req.target)?;
+	validate_reason(&req.reason)?;
 	if req.entry_type != "ip" {
 		return Err(api_error(
 			StatusCode::BAD_REQUEST,
@@ -73,7 +77,7 @@ pub async fn remove_blacklist(
 	State(state): State<Arc<AppState>>,
 	Json(req): Json<RemoveBlacklistRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-	let ip = parse_ip(&req.target)?;
+	let ip = validate_target(&req.target)?;
 	let target = ip.to_string();
 	let event = event_payload(&target, "unban", 0, None)?;
 	let mut conn = state
