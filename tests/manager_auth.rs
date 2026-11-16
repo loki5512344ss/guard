@@ -14,7 +14,6 @@ fn create_verify_roundtrip_passes() {
 	let claims = verify_token(&token, &secret, "rampart").expect("verification should succeed");
 	assert_eq!(claims.sub, "rampart-admin");
 	assert_eq!(claims.aud, "rampart");
-	assert_eq!(claims.role, "admin");
 	assert!(claims.exp > claims.iat);
 }
 

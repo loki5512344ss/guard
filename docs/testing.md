@@ -12,14 +12,20 @@ cargo test --test config_parse
 cargo test -- --nocapture     # с выводом
 ```
 
-Существующие наборы (tests/):
+Существующие наборы (39 файлов в `tests/`):
 
-| Тест | Что покрывает |
-|------|---------------|
-| `config_parse` | Парсинг и валидация единого конфига (src/config) |
-| `filter_logic` | Blacklist, rate limit, geo-фильтры |
-| `pow_roundtrip` | Выдача/решение/проверка PoW challenge |
-| `protocol_registry` | Реестр протокольных плагинов |
+| Группа | Тесты |
+|--------|-------|
+| Конфиг и запуск | `config_parse`, `app_shutdown` |
+| Фильтры и лимиты | `filter_logic`, `connection_limits`, `proxy_identity` |
+| Протоколы | `protocol_registry`, `protocol_registry_contract`, `http_protocol`, `protocol_http_parser`, `protocol_http_handler`, `proxy_v2_parser` |
+| PoW и challenge | `pow_roundtrip`, `pow_difficulty` |
+| Детекция | `subnet_detection`, `traffic_hook`, `traffic_intel`, `traffic_prefix_stats`, `traffic_profile_alert`, `traffic_profile_profiler` |
+| Manager API | `manager_api`, `manager_auth`, `manager_heartbeat`, `manager_security` |
+| Хранилища | `redis_backoff`, `clickhouse_writer` |
+| TUI | `tui_metrics`, `tui_prometheus` |
+| XDP | `xdp_attach_smoke`, `xdp_ban_clock`, `xdp_ban_keys`, `xdp_ban_v6`, `xdp_diagnostics`, `xdp_events`, `xdp_globals`, `xdp_loader`, `xdp_object_maps`, `xdp_services`, `xdp_whitelist_keys` |
+| End-to-end | `edge_e2e` |
 
 ---
 
@@ -42,7 +48,9 @@ cargo test --all-features --test edge_e2e
 XDP: smoke-check компиляции BPF-программы:
 
 ```bash
-clang -O2 -g -target bpf -c xdp/core/universal_filter.c -o /tmp/universal_filter.o
+mkdir -p target/xdp
+clang -O2 -g -target bpf -I"/usr/include/$(gcc -print-multiarch)" \
+  -c xdp/core/universal_filter.c -o target/xdp/universal_filter.o
 ```
 
 Функциональные проверки на реальном ядре (нужен root: CAP_BPF + CAP_NET_ADMIN,
@@ -67,6 +75,10 @@ TCP-payload по `ip->tot_len`), VLAN/QinQ-теги и фрагменты — з
 
 `scripts/xdp_netns_smoke.sh` дополнительно гоняет реальный бинарь `rampart` end-to-end
 (требует `hping3`).
+
+Единая точка входа для CI появится в v0.4 (`scripts/xdp_ci.sh`, см.
+[roadmap/v0.4-xdp-ci-harness.md](roadmap/v0.4-xdp-ci-harness.md)); до этого
+скрипты выше запускаются вручную.
 
 ---
 
@@ -110,15 +122,21 @@ cargo bench --all-features --bench hot_paths
 
 Замеряются: `RateLimiter::check`, exact/CIDR/miss lookup в `Blacklist`, `SubnetDetector::evaluate`
 на окне из 256 префиксов и разбор HTTP request-head. Сравнивай медианы до/после изменения на
-одной машине; абсолютные числа зависят от CPU. Порядок величин на dev-машине (2 vCPU):
+одной машине; абсолютные числа зависят от CPU. Порядок величин на dev-машине (2 vCPU,
+релизный профиль с `lto = "thin"`):
 
 | Бенчмарк | Медиана |
 |----------|---------|
-| `rate_limiter/check` | ~110 ns |
-| `blacklist/is_blocked_exact` | ~70 ns |
-| `blacklist/is_blocked_cidr` | ~220 ns |
-| `subnet_detector/evaluate_256` | ~2.6 µs |
+| `rate_limiter/check` | ~120 ns |
+| `blacklist/is_blocked_exact` | ~80 ns |
+| `blacklist/is_blocked_cidr` | ~230 ns |
+| `blacklist/is_blocked_miss` | ~230 ns |
+| `subnet_detector/evaluate_256` | ~2.8 µs |
 | `http_parser/evaluate` | ~280 ns |
+
+Для сравнения с сохранённым прогоном: `cargo bench --all-features --bench hot_paths --
+--save-baseline before` до изменения, затем `--baseline before` после; criterion покажет
+дельту и её значимость.
 
 ---
 
@@ -173,4 +191,4 @@ curl -s http://localhost:9090/metrics | grep rampart_
 
 ---
 
-*Версия: 2.0 | Август 2026*
+*Версия: 3.0 | Ноябрь 2026*

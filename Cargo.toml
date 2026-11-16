@@ -37,8 +37,8 @@ store-redis = ["dep:redis"]
 geoip = ["dep:maxminddb"]
 xdp = ["dep:libbpf-rs", "dep:libc"]
 io-uring = ["dep:tokio-splice"]
-# HTTP/1.1 protocol handler: парсинг request-head, verdict Allow/Reject,
-# туннелирование на upstream (см. src/protocol/http/ и [protocol.http] в конфиге).
+# HTTP/1.1 protocol handler: request-head parsing, Allow/Reject verdict,
+# upstream tunnelling (see src/protocol/http/ and [protocol.http] in the config).
 protocol-http = []
 protocol-minecraft = []
 
@@ -87,3 +87,12 @@ criterion = { version = "0.5", features = ["html_reports"] }
 name = "hot_paths"
 harness = false
 required-features = ["protocol-http"]
+
+[profile.release]
+# Thin LTO plus one codegen unit: the edge data path is latency-sensitive, and
+# cross-crate inlining is worth the extra build time.
+lto = "thin"
+codegen-units = 1
+# `panic = "abort"` is deliberately NOT set: `store/redis/sync.rs` relies on
+# `catch_unwind` to isolate a malformed pub/sub message, and a panic in one
+# tokio task must not take down the whole edge node.

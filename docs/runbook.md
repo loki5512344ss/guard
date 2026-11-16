@@ -10,7 +10,7 @@
 # ── ШАГ 1: Подтвердить атаку ──
 
 # Метрики edge ноды
-curl -s http://EDGE_IP:9090/metrics | grep -E "rampart_(connections|rate_limit|attack_status)"
+curl -s http://EDGE_IP:9090/metrics | grep -E "rampart_(connections_total|rate_limit_hits|attack_status)"
 
 # rampart_attack_status: 0 = normal, 1 = suspicious, 2 = under_attack
 # (детектор по порогу pps, см. src/traffic/intel/detector.rs)
@@ -50,7 +50,7 @@ iptables -A INPUT -p tcp --dport 25565 -j DROP
 # ── ШАГ 5: После атаки ──
 
 # События атак пишутся в ClickHouse (если настроен clickhouse_url):
-clickhouse-client --query "SELECT count() FROM rampart.events WHERE event_type='attack'"
+clickhouse-client --query "SELECT count() FROM rampart_events WHERE event_type='attack'"
 
 # Написать post-mortem
 ```
@@ -66,9 +66,9 @@ clickhouse-client --query "SELECT count() FROM rampart.events WHERE event_type='
 | Метрика / лог | Что значит | Что делать |
 |---------------|-----------|------------|
 | `rampart_connections_total{result="overloaded"}` | исчерпан глобальный бюджет соединений (4×workers×max_connections_per_ip) | проверить, не атака ли; при легитимной нагрузке — поднять `max_connections_per_ip`/`workers.count` |
-| `rampart_xdp_dropped_total` растёт, `passed_total` — нет | XDP дропает всё | проверить `protected_port_start/end`, баны и `xdp_feature_*`; смотреть `stats_map` через `bpftool` |
+| `rampart_xdp_dropped` растёт, `rampart_xdp_passed` — нет | XDP дропает всё | проверить `protected_port_start/end`, баны и счётчики `stats_map` (список — [architecture.md](architecture.md) §6); смотреть через `bpftool` |
 | `rampart_clickhouse_dropped_total` > 0 | события не успевают уходить в ClickHouse | проверить доступность/латентность ClickHouse; события потеряны, защита работает |
-| `rampart_xdp_whitelist_total` растёт | трафик от whitelist-адресов | норма, но если это неожиданно — проверить `whitelist` в конфиге |
+| `rampart_xdp_whitelist` растёт | трафик от whitelist-адресов | норма, но если это неожиданно — проверить `whitelist` в конфиге |
 | лог `global connection budget exhausted` | то же, что `overloaded` | см. выше |
 | лог `accept error ... backing off` | кончились fd (`EMFILE`) или память под сокеты | поднять `ulimit -n`, проверить утечки соединений |
 | лог `XDP filter attached ... (mode: generic (skb))` | драйвер не умеет native XDP | ожидаемо для virtio/veth; generic дороже по CPU |
@@ -86,7 +86,7 @@ ip link show eth0 | grep xdp     # пусто
 > Команды `emergency`, `drain` и `config set` пока не реализованы и завершатся
 > явной ошибкой вместо изменения состояния.
 
-## 2. Edge нода не стартует
+## 3. Edge нода не стартует
 
 ```bash
 systemctl status rampart
@@ -112,7 +112,7 @@ journalctl -u rampart | grep -i xdp
 # Временное решение: [xdp] enabled = false в config.toml
 ```
 
-## 3. XDP не загружается
+## 4. XDP не загружается
 
 ```bash
 systemd-detect-virt   # openvz/lxc → XDP не работает, нужен KVM
@@ -120,13 +120,14 @@ uname -r              # нужно 5.10+
 ethtool -i eth0 | grep driver
 
 # Проверить компиляцию BPF-программы:
-clang -O2 -g -target bpf -c xdp/core/universal_filter.c -o /tmp/universal_filter.o
+clang -O2 -g -target bpf -I"/usr/include/$(gcc -print-multiarch)" \
+  -c xdp/core/universal_filter.c -o /tmp/universal_filter.o
 
 # Отключить XDP:
 # [xdp] enabled = false → systemctl restart rampart
 ```
 
-## 4. Клиенты не могут подключиться
+## 5. Клиенты не могут подключиться
 
 ```bash
 curl -s http://EDGE_IP:9090/metrics | grep rampart_connections
@@ -138,7 +139,7 @@ dig +short your.domain         # DNS указывает на edge?
 # NAT: много клиентов за одним IP упираются в max_connections_per_ip — увеличь.
 ```
 
-## 5. Высокая нагрузка на edge
+## 6. Высокая нагрузка на edge
 
 ```bash
 htop -p $(pgrep -d',' rampart)
@@ -149,15 +150,15 @@ iftop -i eth0                  # pps/bandwidth
 # чтобы дропать мусор раньше, и ужесточи rate limit.
 ```
 
-## 6. ClickHouse переполнен
+## 7. ClickHouse переполнен
 
 ```bash
 df -h /var/lib/clickhouse
-clickhouse-client --query "ALTER TABLE rampart.events MODIFY TTL ts + INTERVAL 90 DAY"
+clickhouse-client --query "ALTER TABLE rampart_events MODIFY TTL timestamp + INTERVAL 90 DAY"
 # Временное отключение записи: закомментируй clickhouse_url в config.toml, рестарт.
 ```
 
-## 7. Краткий справочник команд
+## 8. Краткий справочник команд
 
 ```bash
 rampart-cli status                        # Общее состояние системы
@@ -171,4 +172,4 @@ rampart-cli blacklist list
 
 ---
 
-*Версия: 2.0 | Август 2026*
+*Версия: 3.0 | Ноябрь 2026*

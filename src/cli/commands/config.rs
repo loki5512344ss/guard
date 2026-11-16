@@ -10,7 +10,7 @@ pub async fn run(key: Option<String>, value: Option<String>) -> anyhow::Result<(
 		(None, Some(_)) | (None, None) => {
 			println!("Configuration");
 			println!("=============\n");
-			println!("Use: rampart config <key> [value]");
+			println!("Use: rampart-cli config <key> [value]");
 			println!();
 			println!("Example keys:");
 			println!("  workers.count");

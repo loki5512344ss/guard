@@ -70,6 +70,8 @@ jobs:
         run: bash scripts/check_module_size.sh
       - name: Default secrets gate
         run: bash scripts/check_default_secrets.sh
+      - name: Documentation links gate
+        run: bash scripts/check_docs_links.sh
 
   rust-deny:
     name: Rust — cargo-deny

@@ -12,7 +12,6 @@ use std::sync::Arc;
 pub struct Claims {
 	pub sub: String,
 	pub aud: String,
-	pub role: String,
 	pub exp: usize,
 	pub iat: usize,
 }
@@ -22,7 +21,6 @@ pub fn create_token(secret: &str, expiration: u64, audience: &str) -> Result<Str
 	let claims = Claims {
 		sub: "rampart-admin".to_string(),
 		aud: audience.to_string(),
-		role: "admin".to_string(),
 		exp: now + expiration as usize,
 		iat: now,
 	};

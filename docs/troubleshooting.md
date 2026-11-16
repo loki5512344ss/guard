@@ -14,7 +14,8 @@ dpkg -l | grep libbpf # libbpf-dev нужен при сборке
 journalctl -u rampart | grep -i "xdp\|ebpf\|bpf"
 
 # Проверить компиляцию BPF-программы вручную:
-clang -O2 -g -target bpf -c xdp/core/universal_filter.c -o /tmp/uf.o
+clang -O2 -g -target bpf -I"/usr/include/$(gcc -print-multiarch)" \
+  -c xdp/core/universal_filter.c -o /tmp/uf.o
 
 # Не помогло — отключи XDP в config.toml ([xdp] enabled = false) и рестарт.
 ```
@@ -166,4 +167,4 @@ rampart-cli status    # краткий статус
 
 ---
 
-*Версия: 2.0 | Август 2026*
+*Версия: 3.0 | Ноябрь 2026*

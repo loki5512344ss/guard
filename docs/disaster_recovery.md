@@ -29,11 +29,11 @@ Edge нода упала:
 
 ### Симптомы
 - Edge перестал синхронизировать блэклист
-- Manager API отдаёт пустые списки nodes/servers/blacklist
+- Manager API отвечает `503` на `/nodes`, `/servers` и `/blacklist`
 
 ### Влияние
 - **Edge:** работает с локальным кэшем; новые баны не распространяются между нодами.
-- **Manager:** данные из Redis недоступны.
+- **Manager:** Redis-зависимые эндпоинты отвечают `503`.
 
 ### Действия
 
@@ -92,7 +92,7 @@ journalctl -u rampart -n 50 --no-pager
 dmesg | grep -i "oom\|rampart"    # OOM kill?
 systemctl restart rampart
 
-# Не стартует — проверь конфиг и логи (см. runbook.md §2)
+# Не стартует — проверь конфиг и логи (см. runbook.md §3)
 ```
 
 ### Предотвращение
@@ -123,8 +123,13 @@ df -h /var/lib/clickhouse   # диск полон?
 # 1. Поднять Manager на новой VDS
 docker compose up -d redis && cargo run --release --bin rampart-manager
 
-# 2. Восстановить Redis из бэкапа
-redis-cli --pipe < /backup/rampart-redis-$(date +%Y-%m-%d).rdb
+# 2. Восстановить Redis из RDB-бэкапа. `redis-cli --pipe` для этого не подходит:
+#    он принимает RESP-команды, а не дамп. Порядок:
+systemctl stop redis
+sudo cp /backup/rampart-redis-$(date +%Y-%m-%d).rdb /var/lib/redis/dump.rdb
+sudo chown redis:redis /var/lib/redis/dump.rdb
+systemctl start redis
+redis-cli DBSIZE                     # снимок загрузился?
 
 # 3. Edge ноды переподключатся автоматически
 
@@ -146,4 +151,8 @@ ss -s | grep TCP
 
 ---
 
-*Версия: 2.0 | Август 2026*
+Готовый список остальных проверок — в [troubleshooting.md](troubleshooting.md) и
+[runbook.md](runbook.md); план развития диагностики — в
+[roadmap/v0.4-startup-diagnostics.md](roadmap/v0.4-startup-diagnostics.md).
+
+*Версия: 3.0 | Ноябрь 2026*

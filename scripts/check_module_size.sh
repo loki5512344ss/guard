@@ -2,7 +2,7 @@
 #
 # check_module_size.sh — module size ratchet.
 #
-# Project standard (TODO.md §4): max 250 lines per .rs file; max 4 .rs files
+# Project standard (docs/development.md §2): max 250 lines per .rs file; max 4 .rs files
 # per source directory (top level, non-recursive, mod.rs included).
 #
 # Rationale — ratchet pattern: the gate blocks regressions immediately while

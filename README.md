@@ -147,30 +147,35 @@ Rampart не спасёт уже забитый домашний канал: п�
 | Маскированный flood с 100 IP (5 pps/IP) | **99.6% заблокировано**, легитимные клиенты работают |
 | SYN flood без XDP | обрабатывается ядром |
 
-Полный набор бенчмарков — в работе.
+Полный набор микробенчмарков горячего пути (criterion) — `cargo bench --all-features
+--bench hot_paths`; медианы и методология — [docs/testing.md](docs/testing.md) §4.
 
 ### Документация
 
 | Раздел | Где |
 |--------|-----|
 | Индекс всей документации | [docs/README.md](docs/README.md) |
+| Архитектура системы | [docs/architecture.md](docs/architecture.md) |
 | Деплой | [docs/deployment.md](docs/deployment.md) |
 | Конфигурация | [docs/configuration.md](docs/configuration.md) |
 | Эксплуатация (runbook) | [docs/runbook.md](docs/runbook.md) |
 | Диагностика | [docs/troubleshooting.md](docs/troubleshooting.md) |
 | Тестирование | [docs/testing.md](docs/testing.md) |
 | API manager'а | [docs/api.md](docs/api.md) |
+| Roadmap и планы задач | [docs/roadmap/](docs/roadmap/README.md) |
+| История изменений | [CHANGELOG.md](CHANGELOG.md) |
 | База знаний (атаки, защита, практика) | [docs/kb/](docs/kb/) |
 | Research: архитектура, eBPF, DDoS | [docs/research/](docs/research/) |
 
 ### Разработка
 
-- Правила кода и Definition of Done — [TODO.md](TODO.md) (§0).
-- Комментарии в коде — только по-английски, JavaDoc/Rustdoc-стиль (§0.8).
+- Правила кода, гейты и Definition of Done — [docs/development.md](docs/development.md).
+- Комментарии в коде — только по-английски, Rustdoc/Javadoc-стиль.
 - Тесты живут в `tests/`, без `#[cfg(test)]` в файлах с кодом.
 - Перед PR: `cargo fmt`, `cargo clippy -D warnings`, `cargo test --all-features`.
 
-Трекер идей и статус задач — [TODO.md](TODO.md), issues и PR — во вкладках репозитория.
+Текущий статус — [TODO.md](TODO.md), планы задач — [docs/roadmap/](docs/roadmap/README.md),
+история — [CHANGELOG.md](CHANGELOG.md). Issues и PR — во вкладках репозитория.
 
 ### Лицензия
 
@@ -306,31 +311,36 @@ Confirmed numbers only — VDS stress test, edge-only on loopback, 2 vCPU
 | Masked 100-IP handshake flood (5 pps/IP) | **99.6% blocked**, legitimate clients unaffected |
 | SYN flood without XDP | handled by the kernel |
 
-The full benchmark suite is in progress.
+The hot-path microbenchmarks (criterion) run with `cargo bench --all-features --bench
+hot_paths`; medians and methodology live in [docs/testing.md](docs/testing.md) §4.
 
 ### Documentation
 
 | Topic | Where |
 |-------|-------|
 | Documentation index | [docs/README.md](docs/README.md) |
+| System architecture | [docs/architecture.md](docs/architecture.md) |
 | Deployment | [docs/deployment.md](docs/deployment.md) |
 | Configuration | [docs/configuration.md](docs/configuration.md) |
 | Operations runbook | [docs/runbook.md](docs/runbook.md) |
 | Troubleshooting | [docs/troubleshooting.md](docs/troubleshooting.md) |
 | Testing | [docs/testing.md](docs/testing.md) |
 | Manager API | [docs/api.md](docs/api.md) |
+| Roadmap and task plans | [docs/roadmap/](docs/roadmap/README.md) |
+| Changelog | [CHANGELOG.md](CHANGELOG.md) |
 | Knowledge base | [docs/kb/](docs/kb/) |
 | Research notes | [docs/research/](docs/research/) |
 
 ### Development
 
-- Coding rules and Definition of Done: [TODO.md](TODO.md) (§0).
-- Code comments are English only, JavaDoc/Rustdoc style (§0.8).
+- Coding rules, gates and Definition of Done: [docs/development.md](docs/development.md).
+- Code comments are English only, Rustdoc/Javadoc style.
 - Tests live in `tests/`; no `#[cfg(test)]` modules in code files.
 - Before a PR: `cargo fmt`, `cargo clippy -D warnings`, `cargo test --all-features`.
 
-Roadmap and task status live in [TODO.md](TODO.md); issues and PRs are in the
-repository tabs.
+Current status lives in [TODO.md](TODO.md), task plans in
+[docs/roadmap/](docs/roadmap/README.md), history in [CHANGELOG.md](CHANGELOG.md).
+Issues and PRs are in the repository tabs.
 
 ### License
 

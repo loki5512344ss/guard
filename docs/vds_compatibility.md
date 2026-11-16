@@ -1,7 +1,7 @@
 # VDS Compatibility - Rampart
 
 > Совместимость VDS провайдеров с XDP/eBPF.
-> Обновляется: Август 2026
+> Обновляется: Ноябрь 2026
 
 ---
 
@@ -34,8 +34,10 @@ ethtool -i eth0 | grep driver
 # 3. Версия ядра (нужно 5.10+)
 uname -r
 
-# 4. XDP доступность
-sudo ip link set dev eth0 xdp off 2>&1 || echo "XDP не поддерживается"
+# 4. Диагностика окружения (XDP, BTF, драйвер, режим attach)
+rampart-cli doctor
+# Строка про XDP: native (drv) — лучший режим, generic (skb) — работает, но дороже.
+# Если XDP недоступен совсем — используй userspace-фильтр (XDP опционален).
 ```
 
 ---
@@ -69,4 +71,4 @@ sudo ip link set dev eth0 xdp off 2>&1 || echo "XDP не поддерживае�
 
 ---
 
-*Версия: 2.0 | Август 2026*
+*Версия: 3.0 | Ноябрь 2026*

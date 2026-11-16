@@ -1,7 +1,8 @@
-# Architecture — Rampart
+# Architecture — Rampart (design rationale, v0.3)
 
 > Relevant for: v0.3+ (universal redesign)
-> Status: primary design document
+> Status: historical design rationale — the current system is described in
+> [../architecture.md](../architecture.md)
 > Language: English (research notes) — see [RU summary](#russian-summary) at the end
 
 ---

@@ -20,6 +20,6 @@ pub async fn run() -> anyhow::Result<()> {
 	}
 
 	println!();
-	println!("To check individual components, run: rampart doctor");
+	println!("To check individual components, run: rampart-cli doctor");
 	Ok(())
 }
