@@ -21,6 +21,17 @@ impl Gateway {
 		metrics::CONNECTIONS_TOTAL.with_label_values(&["blocked"]).inc();
 		self.reputation.record_bad(ip);
 		if self.reputation.score(ip) < -40 {
+			// Defence in depth: a trusted proxy address must never enter the ban
+			// path, even when reputation escalation is reached. Bans are
+			// replicated to Redis and XDP on every node, so one wrong identity
+			// here could take the ingress proxy out of the whole cluster.
+			if self.is_trusted_proxy(ip) {
+				tracing::warn!(
+					%ip,
+					"suppressed ban for an address inside proxy_protocol.trusted_cidrs"
+				);
+				return;
+			}
 			let duration_secs = Duration::from_secs(self.config.ban.ban_duration_secs);
 			self.blacklist.add(ip, duration_secs, "low_reputation");
 			if !self.config.proxy_protocol.ingress_enabled {
@@ -29,6 +40,15 @@ impl Gateway {
 			self.push_event("block", ip, "low_reputation").await;
 			tracing::info!("low reputation ban {ip}: rate-limit abuse");
 		}
+	}
+
+	/// Returns whether `ip` belongs to a configured trusted proxy network.
+	fn is_trusted_proxy(&self, ip: IpAddr) -> bool {
+		self.config
+			.proxy_protocol
+			.trusted_cidrs
+			.iter()
+			.any(|cidr| cidr.contains(ip))
 	}
 
 	/// Mirrors a ban into the XDP map, if the kernel filter is attached.

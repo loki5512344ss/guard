@@ -21,7 +21,6 @@ impl Default for BindConfig {
 		}
 	}
 }
-
 fn default_bind_address() -> String {
 	"0.0.0.0".to_string()
 }
@@ -43,7 +42,6 @@ impl Default for BackendConfig {
 		}
 	}
 }
-
 fn default_upstreams() -> Vec<String> {
 	vec!["127.0.0.1:25566".to_string()]
 }
@@ -60,7 +58,6 @@ impl Default for WorkerConfig {
 		Self { count: 4 }
 	}
 }
-
 fn default_worker_count() -> usize {
 	4
 }
@@ -76,6 +73,11 @@ pub struct LimitsConfig {
 	pub rate_limit_pps: f64,
 	#[serde(default = "default_rate_limit_burst")]
 	pub rate_limit_burst: f64,
+	#[serde(
+		default = "default_relay_idle_timeout",
+		deserialize_with = "deserialize_relay_idle_timeout"
+	)]
+	pub relay_idle_timeout_secs: u64,
 }
 
 impl Default for LimitsConfig {
@@ -85,10 +87,10 @@ impl Default for LimitsConfig {
 			max_connections_per_ip: default_max_connections_per_ip(),
 			rate_limit_pps: default_rate_limit_pps(),
 			rate_limit_burst: default_rate_limit_burst(),
+			relay_idle_timeout_secs: default_relay_idle_timeout(),
 		}
 	}
 }
-
 fn default_handshake_timeout() -> u64 {
 	5
 }
@@ -100,6 +102,22 @@ fn default_rate_limit_pps() -> f64 {
 }
 fn default_rate_limit_burst() -> f64 {
 	10.0
+}
+fn default_relay_idle_timeout() -> u64 {
+	300
+}
+
+/// Deserializes and validates `limits.relay_idle_timeout_secs`.
+/// # Errors
+/// Fails outside `1..=86_400`; zero would cut every relayed session immediately.
+fn deserialize_relay_idle_timeout<'de, D: Deserializer<'de>>(deserializer: D) -> Result<u64, D::Error> {
+	let secs = u64::deserialize(deserializer)?;
+	if (1..=86_400).contains(&secs) {
+		return Ok(secs);
+	}
+	Err(serde::de::Error::custom(
+		"limits.relay_idle_timeout_secs must be between 1 and 86400",
+	))
 }
 
 /// `[ban]` section: default ban duration.
@@ -116,7 +134,6 @@ impl Default for BanConfig {
 		}
 	}
 }
-
 fn default_ban_duration() -> u64 {
 	3600
 }
@@ -153,11 +170,11 @@ impl TrustedProxyCidr {
 	/// Returns whether `ip` belongs to this network.
 	#[must_use]
 	pub fn contains(&self, ip: IpAddr) -> bool {
-		let mask4 = mask_v4(self.prefix_len);
-		let mask6 = mask_v6(self.prefix_len);
+		// Masks are family-specific: a prefix above 32 would underflow the v4 shift.
+		let prefix = self.prefix_len;
 		match (self.network, ip) {
-			(IpAddr::V4(network), IpAddr::V4(ip)) => u32::from(network) & mask4 == u32::from(ip) & mask4,
-			(IpAddr::V6(network), IpAddr::V6(ip)) => u128::from(network) & mask6 == u128::from(ip) & mask6,
+			(IpAddr::V4(net), IpAddr::V4(ip)) => u32::from(net) & mask_v4(prefix) == u32::from(ip) & mask_v4(prefix),
+			(IpAddr::V6(net), IpAddr::V6(ip)) => u128::from(net) & mask_v6(prefix) == u128::from(ip) & mask_v6(prefix),
 			_ => false,
 		}
 	}
@@ -167,18 +184,12 @@ impl FromStr for TrustedProxyCidr {
 	type Err = String;
 
 	fn from_str(value: &str) -> Result<Self, Self::Err> {
-		let (address, prefix) = match value.split_once('/') {
-			Some((address, prefix)) => (address, Some(prefix)),
-			None => (value, None),
-		};
+		let (address, prefix) = value.split_once('/').map_or((value, None), |(a, p)| (a, Some(p)));
 		let network = IpAddr::from_str(address).map_err(|_| format!("invalid trusted proxy CIDR: {value}"))?;
 		let max_prefix = if network.is_ipv4() { 32 } else { 128 };
-		let prefix_len = match prefix {
-			Some(prefix) => prefix
-				.parse::<u8>()
-				.map_err(|_| format!("invalid trusted proxy CIDR prefix: {value}"))?,
-			None => max_prefix,
-		};
+		let prefix_len = prefix
+			.map_or(Ok(max_prefix), |prefix| prefix.parse::<u8>())
+			.map_err(|_| format!("invalid trusted proxy CIDR prefix: {value}"))?;
 		if prefix_len > max_prefix {
 			return Err(format!("trusted proxy CIDR prefix is too large: {value}"));
 		}
@@ -231,7 +242,6 @@ impl Default for ProxyProtocolConfig {
 		}
 	}
 }
-
 fn default_proxy_protocol_timeout_ms() -> u64 {
 	750
 }

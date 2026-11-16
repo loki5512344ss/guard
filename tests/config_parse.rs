@@ -239,6 +239,30 @@ fn rejects_rate_limit_burst_below_one() {
 }
 
 #[test]
+fn relay_idle_timeout_defaults_to_300_and_accepts_the_full_range() {
+	let config = Config::parse_str("").expect("empty config must parse");
+	assert_eq!(config.limits.relay_idle_timeout_secs, 300);
+
+	for secs in [1u64, 60, 300, 86_400] {
+		let toml = format!("[limits]\nrelay_idle_timeout_secs = {secs}\n");
+		let config = Config::parse_str(&toml).expect("in-range idle timeout must parse");
+		assert_eq!(config.limits.relay_idle_timeout_secs, secs);
+	}
+}
+
+#[test]
+fn rejects_out_of_range_relay_idle_timeout() {
+	for secs in [0u64, 86_401] {
+		let toml = format!("[limits]\nrelay_idle_timeout_secs = {secs}\n");
+		let err = Config::parse_str(&toml).expect_err("idle timeout outside 1..=86400 must be rejected");
+		assert!(
+			err.to_string().contains("limits.relay_idle_timeout_secs"),
+			"idle timeout '{secs}' must be rejected"
+		);
+	}
+}
+
+#[test]
 fn rejects_out_of_range_ban_duration() {
 	let err = Config::parse_str("[ban]\nban_duration_secs = 0\n").expect_err("zero ban duration must be rejected");
 	assert!(err.to_string().contains("ban.ban_duration_secs"));

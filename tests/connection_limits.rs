@@ -3,7 +3,7 @@
 
 use rampart::config::Config;
 use rampart::engine::challenge::DifficultyAdjuster;
-use rampart::engine::listener::AcceptBackoff;
+use rampart::engine::listener::{AcceptBackoff, build_listener, parse_listen_addr};
 use rampart::engine::tunnel::Gateway;
 use rampart::filter::blacklist::Blacklist;
 use rampart::filter::rate_limit::RateLimiter;
@@ -11,7 +11,7 @@ use rampart::protocol::ProtocolRegistry;
 use rampart::traffic::reputation::IpReputation;
 use std::collections::HashSet;
 use std::io;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::AtomicU64;
@@ -260,6 +260,45 @@ async fn accept_backoff_sleeps_instead_of_spinning() {
 	assert!(
 		started.elapsed() >= slept,
 		"the loop cannot advance faster than its backoff"
+	);
+}
+
+/// The listen address is parsed as an IP literal and the socket domain follows
+/// the address family, so IPv6 loopback binds instead of forcing IPv4.
+#[tokio::test]
+async fn binds_ipv4_and_ipv6_loopback() {
+	let v4 = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
+	let listener = build_listener(v4).expect("bind IPv4 loopback");
+	assert!(listener.local_addr().expect("local addr").is_ipv4());
+
+	let v6 = SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), 0);
+	let listener = build_listener(v6).expect("bind IPv6 loopback");
+	assert!(listener.local_addr().expect("local addr").is_ipv6());
+}
+
+/// `::` must parse as a wildcard IPv6 listen address instead of being
+/// concatenated into the invalid `":::port"` form.
+#[test]
+fn parses_ipv6_wildcard_listen_address() {
+	let addr = parse_listen_addr("::", 25565).expect("IPv6 wildcard must parse");
+	assert_eq!(addr, SocketAddr::new(IpAddr::V6(Ipv6Addr::UNSPECIFIED), 25565));
+	assert!(addr.is_ipv6());
+}
+
+/// The relay idle budget is configurable through `limits` instead of being a
+/// hardcoded constant.
+#[test]
+fn relay_idle_timeout_comes_from_limits_config() {
+	let mut config = Config::default();
+	config.limits.relay_idle_timeout_secs = 1;
+	let gateway = test_gateway(config, HashSet::new());
+	assert_eq!(gateway.relay_idle_timeout(), Duration::from_secs(1));
+
+	let default_gateway = test_gateway(Config::default(), HashSet::new());
+	assert_eq!(
+		default_gateway.relay_idle_timeout(),
+		Duration::from_secs(300),
+		"the default idle budget is 300s"
 	);
 }
 

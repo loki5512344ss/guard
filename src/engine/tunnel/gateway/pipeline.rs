@@ -1,48 +1,16 @@
 //! Filter order and upstream establishment for one accepted connection.
 
 use super::Gateway;
-use super::RELAY_IDLE_TIMEOUT;
 use crate::metrics;
-use std::sync::OnceLock;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
-use tokio::sync::Semaphore;
 
-/// Multiplier applied to the per-IP limit when sizing the global connection
-/// budget: `4 x workers x max_connections_per_ip` in-flight connections.
-const GLOBAL_BUDGET_FACTOR: usize = 4;
-/// Ceiling of the global budget, so a large worker count cannot exhaust the
-/// file-descriptor table of the host.
-const GLOBAL_BUDGET_MAX: usize = 100_000;
 /// One in every `BUDGET_LOG_EVERY` budget rejections is logged.
 const BUDGET_LOG_EVERY: u64 = 128;
 
-/// Process-wide in-flight connection budget.
-///
-/// Initialised on first use from the worker count and the per-IP limit of the
-/// gateway configuration. A process-wide value is intentional: the budget caps
-/// descriptors and tasks for the whole edge node, and there is exactly one
-/// gateway per process in production.
-static GLOBAL_BUDGET: OnceLock<Semaphore> = OnceLock::new();
-/// Total connections rejected by the global budget, used for log rate limiting.
-static BUDGET_REJECTIONS: AtomicU64 = AtomicU64::new(0);
-
 impl Gateway {
-	/// Returns the process-wide in-flight connection budget.
-	fn global_budget(&self) -> &'static Semaphore {
-		GLOBAL_BUDGET.get_or_init(|| {
-			let workers = self.config.workers.count.max(1);
-			let per_ip = self.config.limits.max_connections_per_ip.max(1) as usize;
-			let capacity = workers
-				.saturating_mul(per_ip)
-				.saturating_mul(GLOBAL_BUDGET_FACTOR)
-				.clamp(1, GLOBAL_BUDGET_MAX);
-			Semaphore::new(capacity)
-		})
-	}
-
 	/// Runs the filter stages, PoW gate, protocol handshake and relay.
 	///
 	/// # Errors
@@ -86,11 +54,11 @@ impl Gateway {
 		let _global_permit = if trusted {
 			None
 		} else {
-			match self.global_budget().try_acquire() {
+			match self.budget.try_acquire() {
 				Ok(permit) => Some(permit),
 				Err(_) => {
 					metrics::CONNECTIONS_TOTAL.with_label_values(&["overloaded"]).inc();
-					let seen = BUDGET_REJECTIONS.fetch_add(1, Ordering::Relaxed);
+					let seen = self.budget_rejections.fetch_add(1, Ordering::Relaxed);
 					if seen % BUDGET_LOG_EVERY == 0 {
 						tracing::warn!(
 							"global connection budget exhausted after {seen} rejections, dropping {peer_ip}"
@@ -145,7 +113,7 @@ impl Gateway {
 			handshake_budget,
 		)
 		.await?;
-		self.relay_with_idle(client, backend, RELAY_IDLE_TIMEOUT).await
+		self.relay_with_idle(client, backend, self.relay_idle_timeout()).await
 	}
 
 	/// Opens the upstream connection under the handshake timeout.

@@ -10,8 +10,6 @@ mod challenge;
 mod pipeline;
 mod relay;
 
-pub use relay::RELAY_IDLE_TIMEOUT;
-
 #[cfg(feature = "protocol-minecraft")]
 use super::proxy;
 use super::{Gateway, GatewayOutcome};
@@ -31,6 +29,7 @@ use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex};
 use tokio::net::TcpStream;
 use tokio::sync::Mutex as TokioMutex;
+use tokio::sync::Semaphore;
 
 impl Gateway {
 	#[allow(clippy::too_many_arguments)]
@@ -48,6 +47,7 @@ impl Gateway {
 		subnet_tracker: Option<Arc<SubnetTracker>>,
 	) -> Self {
 		let max_connections = config.limits.max_connections_per_ip as usize;
+		let budget = Arc::new(Semaphore::new(super::connection_budget_capacity(&config)));
 		Self {
 			config,
 			rate_limiter,
@@ -61,6 +61,8 @@ impl Gateway {
 			allowed_1s,
 			registry,
 			subnet_tracker,
+			budget,
+			budget_rejections: AtomicU64::new(0),
 			upstream_cursor: std::sync::atomic::AtomicUsize::new(0),
 		}
 	}

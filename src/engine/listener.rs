@@ -3,8 +3,10 @@
 use crate::config::Config;
 use crate::engine::tunnel::Gateway;
 use crate::traffic::hook::TrafficHook;
+use anyhow::Context;
 use socket2::{Domain, Socket, Type};
 use std::io::ErrorKind;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::TcpListener;
@@ -119,7 +121,7 @@ pub async fn run(
 	hook: Arc<TrafficHook>,
 	shutdown: watch::Receiver<bool>,
 ) -> anyhow::Result<()> {
-	let addr: std::net::SocketAddr = format!("{}:{}", config.bind.address, config.bind.port).parse()?;
+	let addr = parse_listen_addr(&config.bind.address, config.bind.port)?;
 	let workers = config.workers.count.max(1);
 
 	let mut handles = Vec::with_capacity(workers);
@@ -139,11 +141,39 @@ pub async fn run(
 	Ok(())
 }
 
-fn build_listener(addr: std::net::SocketAddr) -> anyhow::Result<TcpListener> {
-	let socket = Socket::new(Domain::IPV4, Type::STREAM, None)?;
+/// Parses the configured listen address into a socket address.
+///
+/// The address must be an IP literal: resolving a host name at startup would
+/// make the bound family depend on resolver state, and the listener needs the
+/// family up front to pick the correct socket domain.
+///
+/// # Errors
+/// Fails when `address` is not a valid IPv4 or IPv6 literal.
+pub fn parse_listen_addr(address: &str, port: u16) -> anyhow::Result<SocketAddr> {
+	let ip: IpAddr = address
+		.parse()
+		.with_context(|| format!("bind.address must be an IP address, got {address:?}"))?;
+	Ok(SocketAddr::new(ip, port))
+}
+
+/// Binds a TCP listener on `addr` with `SO_REUSEPORT` and `SO_REUSEADDR`.
+///
+/// The socket domain follows the address family, so IPv6 listen addresses work
+/// as well as IPv4 ones. An IPv6 wildcard socket is switched to dual-stack mode
+/// (`IPV6_V6ONLY=0`), which keeps `bind.address = "::"` accepting IPv4 clients
+/// through IPv4-mapped addresses.
+///
+/// # Errors
+/// Fails when the socket cannot be created, configured or bound.
+pub fn build_listener(addr: SocketAddr) -> anyhow::Result<TcpListener> {
+	let domain = if addr.is_ipv4() { Domain::IPV4 } else { Domain::IPV6 };
+	let socket = Socket::new(domain, Type::STREAM, None)?;
 	socket.set_reuse_port(true)?;
 	socket.set_reuse_address(true)?;
 	socket.set_nonblocking(true)?;
+	if addr.is_ipv6() && addr.ip().is_unspecified() {
+		socket.set_only_v6(false)?;
+	}
 	socket.bind(&addr.into())?;
 	socket.listen(65535)?;
 	Ok(TcpListener::from_std(socket.into())?)

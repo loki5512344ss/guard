@@ -8,17 +8,17 @@ use tokio::net::TcpStream;
 
 const RELAY_BUFFER_BYTES: usize = 16 * 1024;
 
-/// Idle budget of the client/backend relay.
-///
-/// Minecraft keeps one connection alive for a whole session and a legitimately
-/// silent gap (menus, chunk loading, AFK timeouts) can last minutes, so 300s is
-/// the safe default: it never cuts a real session and still reaps dead peers.
-/// The value is a constant because `[limits]` is owned by a parallel change; it
-/// is plumbed as a parameter through [`Gateway::relay_with_idle`] so a config
-/// field can be wired in without touching the relay itself.
-pub const RELAY_IDLE_TIMEOUT: Duration = Duration::from_secs(300);
-
 impl Gateway {
+	/// Returns the configured idle budget of the client/backend relay.
+	///
+	/// `limits.relay_idle_timeout_secs` defaults to 300s: Minecraft keeps one
+	/// connection alive for a whole session and a legitimately silent gap
+	/// (menus, chunk loading, AFK timeouts) can last minutes, so a short budget
+	/// would cut real sessions while a missing one would pin descriptors.
+	pub fn relay_idle_timeout(&self) -> Duration {
+		Duration::from_secs(self.config.limits.relay_idle_timeout_secs)
+	}
+
 	/// Relays bytes in both directions until either side closes, an I/O error
 	/// occurs or a direction stays silent for `idle`.
 	///

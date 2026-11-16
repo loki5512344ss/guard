@@ -16,6 +16,7 @@ handshake_timeout_secs = 5
 max_connections_per_ip = 10
 rate_limit_pps = 5.0
 rate_limit_burst = 10.0
+relay_idle_timeout_secs = 300
 
 [ban]
 ban_duration_secs = 3600
