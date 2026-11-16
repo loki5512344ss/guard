@@ -31,15 +31,6 @@ impl Source {
 			Source::Tracker(tracker) => tracker.snapshot().await,
 		}
 	}
-
-	/// Whether the source reports distinct source addresses per prefix.
-	fn counts_unique_sources(&self) -> bool {
-		match self {
-			#[cfg(feature = "xdp")]
-			Source::Xdp(_) => false,
-			Source::Tracker(_) => true,
-		}
-	}
 }
 
 /// Verdict enforcement settings shared by every snapshot tick.
@@ -82,7 +73,6 @@ pub fn spawn(
 		ttl: ban_ttl,
 		trusted: trusted_peer,
 	};
-	let extreme_threshold = detect.syn_threshold.saturating_mul(4);
 
 	tokio::spawn(async move {
 		let mut tick = tokio::time::interval(window);
@@ -99,7 +89,7 @@ pub fn spawn(
 					match source.snapshot().await {
 						Ok(snaps) => {
 							let verdicts = detector.evaluate(&snaps);
-							apply_verdicts(&verdicts, &source, &policy, extreme_threshold);
+							apply_verdicts(&verdicts, &source, &policy);
 						},
 						Err(e) => tracing::debug!("prefix stats unavailable: {e}"),
 					}
@@ -119,7 +109,7 @@ fn build_source(tracker: Option<Arc<SubnetTracker>>, xdp: Option<Arc<Mutex<XdpFi
 	tracker.map(|t| Source::Tracker(TrackerSource { tracker: t }))
 }
 
-fn apply_verdicts(verdicts: &[PrefixVerdict], source: &Source, policy: &BanPolicy, extreme_threshold: u64) {
+fn apply_verdicts(verdicts: &[PrefixVerdict], source: &Source, policy: &BanPolicy) {
 	for pv in verdicts {
 		metrics::SUBNET_VERDICTS
 			.with_label_values(&[verdict_name(pv.verdict)])
@@ -131,18 +121,6 @@ fn apply_verdicts(verdicts: &[PrefixVerdict], source: &Source, policy: &BanPolic
 			verdict = verdict_name(pv.verdict),
 			"subnet verdict"
 		);
-		if pv.verdict == SubnetVerdict::Challenge
-			&& !source.counts_unique_sources()
-			&& pv.snapshot.syn_count >= extreme_threshold
-		{
-			// XDP does not count distinct sources, so the spoof gate can never
-			// confirm `Block` on that path; make the cap visible instead of silent.
-			tracing::info!(
-				prefix = %pv.prefix,
-				syn = pv.snapshot.syn_count,
-				"spoof gate suppressed block: XDP has no source diversity data; escalating at L7 only"
-			);
-		}
 	}
 	match source {
 		#[cfg(feature = "xdp")]

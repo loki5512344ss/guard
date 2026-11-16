@@ -152,7 +152,7 @@ fn mapped_ipv6_treated_as_ipv4() {
 #[test]
 fn prefix_key_roundtrip_and_layout() {
 	assert_eq!(size_of::<PrefixKey>(), 24);
-	assert_eq!(size_of::<PrefixStatsVal>(), 24);
+	assert_eq!(size_of::<PrefixStatsVal>(), 32);
 	let key = PrefixKey::new(v4([10, 1, 2, 3]));
 	assert_eq!(key.family, rampart::traffic::prefix::PREFIX_FAMILY_V4);
 	assert_eq!(key.to_prefix(), Some(v4([10, 1, 2, 0])));

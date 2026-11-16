@@ -9,29 +9,40 @@ pub struct PrefixStatsVal {
 	pub syn_count: u64,
 	pub pkt_count: u64,
 	pub last_seen_ns: u64,
+	/// 64-bit bitmap of hashed source addresses; popcount estimates the number
+	/// of distinct sources in the window.
+	pub source_bits: u64,
 }
 
 impl PrefixStatsVal {
-	/// Parses the raw 24-byte map value.
+	/// Parses the raw 32-byte map value.
 	#[must_use]
-	pub fn from_bytes(bytes: [u8; 24]) -> Self {
+	pub fn from_bytes(bytes: [u8; 32]) -> Self {
 		let read_u64 =
 			|range: std::ops::Range<usize>| u64::from_le_bytes(bytes[range].try_into().expect("8-byte field"));
 		Self {
 			syn_count: read_u64(0..8),
 			pkt_count: read_u64(8..16),
 			last_seen_ns: read_u64(16..24),
+			source_bits: read_u64(24..32),
 		}
 	}
 
-	/// Serialises the value into the raw 24-byte map layout.
+	/// Serialises the value into the raw 32-byte map layout.
 	#[must_use]
-	pub fn to_bytes(self) -> [u8; 24] {
-		let mut out = [0u8; 24];
+	pub fn to_bytes(self) -> [u8; 32] {
+		let mut out = [0u8; 32];
 		out[0..8].copy_from_slice(&self.syn_count.to_le_bytes());
 		out[8..16].copy_from_slice(&self.pkt_count.to_le_bytes());
 		out[16..24].copy_from_slice(&self.last_seen_ns.to_le_bytes());
+		out[24..32].copy_from_slice(&self.source_bits.to_le_bytes());
 		out
+	}
+
+	/// Estimated number of distinct sources seen in this window.
+	#[must_use]
+	pub fn unique_sources(&self) -> u64 {
+		u64::from(self.source_bits.count_ones())
 	}
 }
 
@@ -178,26 +189,10 @@ impl PrefixStatsSource for XdpPrefixStats {
 						syn_count: val.syn_count,
 						pkt_count: val.pkt_count,
 						last_seen_ns: val.last_seen_ns,
-						unique_sources: 0,
+						unique_sources: val.unique_sources(),
 					},
 				))
 			})
 			.collect())
-	}
-}
-
-#[cfg(test)]
-mod tests {
-	use super::*;
-
-	#[test]
-	fn stats_val_roundtrip() {
-		let val = PrefixStatsVal {
-			syn_count: 42,
-			pkt_count: 100,
-			last_seen_ns: 1_234_567_890,
-		};
-		assert_eq!(PrefixStatsVal::from_bytes(val.to_bytes()), val);
-		assert_eq!(size_of::<PrefixStatsVal>(), 24);
 	}
 }

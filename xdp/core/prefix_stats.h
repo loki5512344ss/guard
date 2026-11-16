@@ -34,6 +34,7 @@ struct prefix_stats_val {
     __u64 syn_count;
     __u64 pkt_count;
     __u64 last_seen_ns;   // bpf_ktime_get_ns()
+    __u64 source_bits;    // 64-bit bitmap of hashed source addresses
 };
 
 /**
@@ -88,6 +89,24 @@ static __always_inline void prefix_key_from_v6(struct prefix_key *key,
 }
 
 /**
+ * Maps a 32-bit source identifier to one bit of a 64-bit bitmap.
+ *
+ * The subnet detector needs an estimate of distinct sources ("spoof gate":
+ * a /24 flooded from one IP is not a botnet). Exact counting in XDP would
+ * need an unbounded map, so we set a bit of a multiplicative hash. Collisions
+ * can only over-count, and with min_unique_sources=16 the 64-bit space makes
+ * that unlikely for a real botnet while a single source still sets one bit.
+ *
+ * @param src_id  identifier that differs per source address
+ * @return        a single-bit mask
+ */
+static __always_inline __u64 source_bit(__u32 src_id)
+{
+    __u32 hash = src_id * 2654435761u;
+    return 1ULL << (hash >> 26);
+}
+
+/**
  * Increment the counters for one prefix.
  *
  * Creates the entry on first sight. is_syn selects the counter to bump, so a
@@ -97,17 +116,21 @@ static __always_inline void prefix_key_from_v6(struct prefix_key *key,
  * @param key     prefix key, already built
  * @param is_syn  1 counts a SYN, 0 counts any other packet
  * @param now     current bpf_ktime_get_ns() timestamp
+ * @param src_id  32-bit identifier of the full source address
  */
 static __always_inline void update_prefix_stats(struct prefix_key *key,
-                                                __u8 is_syn, __u64 now)
+                                                __u8 is_syn, __u64 now,
+                                                __u32 src_id)
 {
+    __u64 bit = source_bit(src_id);
     struct prefix_stats_val *val = bpf_map_lookup_elem(&prefix_stats, key);
 
     if (!val) {
         struct prefix_stats_val init = {
-            .syn_count   = is_syn ? 1 : 0,
-            .pkt_count   = is_syn ? 0 : 1,
+            .syn_count    = is_syn ? 1 : 0,
+            .pkt_count    = is_syn ? 0 : 1,
             .last_seen_ns = now,
+            .source_bits  = bit,
         };
         bpf_map_update_elem(&prefix_stats, key, &init, BPF_ANY);
         return;
@@ -117,6 +140,7 @@ static __always_inline void update_prefix_stats(struct prefix_key *key,
         __sync_fetch_and_add(&val->syn_count, 1);
     else
         __sync_fetch_and_add(&val->pkt_count, 1);
+    __sync_fetch_and_or(&val->source_bits, bit);
     val->last_seen_ns = now;
 }
 

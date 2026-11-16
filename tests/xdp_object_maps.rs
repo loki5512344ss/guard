@@ -69,7 +69,7 @@ fn map_key_and_value_sizes_match_the_rust_encoding() {
 		("blacklist6_map", 20, 8),
 		("whitelist_map", 8, 1),
 		("whitelist6_map", 20, 1),
-		("prefix_stats", 24, 24),
+		("prefix_stats", 24, 32),
 		("stats_map", 4, 8),
 	];
 	for (name, key_size, value_size) in expected {

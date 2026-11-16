@@ -425,7 +425,9 @@ int rampart_universal_filter(struct xdp_md *ctx)
         struct prefix_key pkey6;
         prefix_key_from_v6(&pkey6, src6);
         struct tcphdr *tcp6 = (struct tcphdr *)l4;
-        update_prefix_stats(&pkey6, (tcp6->syn && !tcp6->ack) ? 1 : 0, now);
+        __u32 v6_id;
+        __builtin_memcpy(&v6_id, src6 + 12, 4); // interface ID differs per host
+        update_prefix_stats(&pkey6, (tcp6->syn && !tcp6->ack) ? 1 : 0, now, v6_id);
         inc_pass();
         return XDP_PASS;
     }
@@ -560,7 +562,7 @@ int rampart_universal_filter(struct xdp_md *ctx)
         }
 
         // Count SYN only after throttle passed (don't count throttled SYNs)
-        update_prefix_stats(&pkey, 1, now);
+        update_prefix_stats(&pkey, 1, now, src_ip);
 
         // Create conntrack entry for new connection. A SYN may carry data
         // (TCP Fast Open), which is acknowledged as part of the handshake;
@@ -584,7 +586,7 @@ int rampart_universal_filter(struct xdp_md *ctx)
 
     // Connection tracking lookup.
     // pkt_count: all non-SYN TCP that survived blacklist/bypass/throttle
-    update_prefix_stats(&pkey, 0, now);
+    update_prefix_stats(&pkey, 0, now, src_ip);
 
     // RST challenge proof: match a pending challenge before conntrack,
     // because the RST answers a flow that was never tracked.

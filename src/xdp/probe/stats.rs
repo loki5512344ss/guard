@@ -96,7 +96,12 @@ impl XdpFilter {
 		})
 	}
 
-	/// Reads the `prefix_stats` map (aggregates per /24 and /64 prefix).
+	/// Reads and resets the `prefix_stats` map (aggregates per /24 and /64).
+	///
+	/// The counters are per-window by contract: the detector compares them
+	/// against fixed thresholds, so leaving them cumulative would eventually
+	/// flag every prefix. Packets that arrive between the read and the reset
+	/// are lost, which is acceptable for statistics.
 	///
 	/// # Errors
 	/// XDP is not loaded, the map is missing from the object, or a BPF read fails.
@@ -110,10 +115,13 @@ impl XdpFilter {
 			let Some(val) = map.lookup(&kb, MapFlags::ANY).context("prefix_stats lookup failed")? else {
 				continue;
 			};
-			let Ok(vb) = <[u8; 24]>::try_from(val.as_slice()) else {
+			let Ok(vb) = <[u8; 32]>::try_from(val.as_slice()) else {
 				continue;
 			};
 			out.push((PrefixKey::from_bytes(kb), PrefixStatsVal::from_bytes(vb)));
+			if let Err(e) = map.update(&kb, &[0u8; 32], MapFlags::ANY) {
+				tracing::debug!(prefix = ?PrefixKey::from_bytes(kb), error = %e, "prefix_stats reset failed");
+			}
 		}
 		Ok(out)
 	}
