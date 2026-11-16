@@ -13,7 +13,7 @@
 |---|---|
 | Версия | `0.3.0-dev` |
 | Milestone | **v0.4 — надёжность и воспроизводимость** |
-| CI | зелёный: fmt, clippy, тесты, deny, Docker, module-size, secrets |
+| CI | зелёный: fmt, clippy, тесты, deny, Docker, module-size, secrets, docs-links |
 | Следующий релиз | v0.4 после закрытия трёх задач ниже |
 
 ## 2. Активные задачи (v0.4)

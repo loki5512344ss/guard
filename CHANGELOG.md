@@ -14,6 +14,8 @@
 - `docs/development.md` — принципы, лимиты, гейты, Definition of Done.
 - `docs/roadmap/` — по одному файлу на задачу; `TODO.md` стал тонким индексом.
 - `CHANGELOG.md` — этот файл.
+- `scripts/check_docs_links.sh` — проверка относительных ссылок в документации,
+  запускается в CI.
 
 ### Changed
 
