@@ -14,9 +14,9 @@ env:
 jobs:
   rust-check:
     name: Rust — check & clippy
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
@@ -31,29 +31,29 @@ jobs:
       - name: XDP — smoke-check BPF compilation (clang)
         run: |
           mkdir -p target/xdp
-          # clang with `-target bpf` не смотрит в multiarch-каталог glibc,
-          # поэтому asm/types.h из linux/types.h ищем явно.
+          # clang with `-target bpf` does not search the glibc multiarch directory,
+          # so the asm/types.h pulled in by linux/types.h needs an explicit -I.
           clang -O2 -g -target bpf -I"/usr/include/$(gcc -print-multiarch)" \
             -c xdp/core/universal_filter.c -o target/xdp/universal_filter.o
           test -f target/xdp/universal_filter.o
 
   rust-test:
     name: Rust — test
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      # libbpf-sys собирает vendored libbpf (нужны libelf/zlib), а build.rs
-      # компилирует XDP-программу через clang (нужны libbpf-dev/linux-libc-dev)
+      # libbpf-sys builds a vendored libbpf (needs libelf/zlib), and build.rs
+      # compiles the XDP program with clang (needs libbpf-dev/linux-libc-dev).
       - run: sudo apt-get update && sudo apt-get install -y libelf-dev zlib1g-dev libbpf-dev clang linux-libc-dev
       - run: cargo test --all-features
 
   rust-test-no-default-features:
     name: Rust — test (no default features, protocol-http)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: sudo apt-get update && sudo apt-get install -y libelf-dev zlib1g-dev libbpf-dev clang linux-libc-dev
@@ -63,9 +63,9 @@ jobs:
 
   repo-gates:
     name: Repo — module size & default secrets
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Module size gate
         run: bash scripts/check_module_size.sh
       - name: Default secrets gate
@@ -73,22 +73,22 @@ jobs:
 
   rust-deny:
     name: Rust — cargo-deny
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: EmbarkStudios/cargo-deny-action@v2
         with:
           command: check
 
   docker:
     name: Docker — build edge image
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: [rust-test]
     steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
       - name: Build edge
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: deploy/docker/Dockerfile.edge

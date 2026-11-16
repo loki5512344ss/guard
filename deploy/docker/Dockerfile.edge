@@ -6,8 +6,11 @@ WORKDIR /app
 COPY Cargo.toml Cargo.lock rustfmt.toml clippy.toml deny.toml build.rs ./
 COPY src/ ./src/
 COPY xdp/ ./xdp/
+# Cargo.toml declares `[[bench]] hot_paths`; the manifest does not parse unless
+# the target file exists, even though the image only builds the `rampart` bin.
+COPY benches/ ./benches/
 
-# Smoke-check: BPF-программа компилируется clang'ом (не грузится, только сборка)
+# Smoke-check: the BPF program compiles with clang (build only, never loaded).
 RUN if command -v clang >/dev/null; then \
       mkdir -p /app/target/xdp && \
       clang -O2 -g -target bpf -I"/usr/include/$(gcc -print-multiarch)" -c xdp/core/universal_filter.c -o /app/target/xdp/universal_filter.o; \
