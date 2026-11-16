@@ -3,7 +3,7 @@
 CARGO = cargo
 TARGET_DIR = target
 
-.PHONY: all build release test test-all check check-all fmt fmt-check clippy clean deny audit fuzz
+.PHONY: all build release test test-all check check-all fmt fmt-check clippy clean deny audit fuzz bench
 .PHONY: ebpf ebpf-clean
 .PHONY: docker docker-build docker-up docker-down docker-logs
 .PHONY: ci ci-full repo-gates
@@ -77,6 +77,9 @@ docker-logs:
 
 checkstyle: fmt-check clippy
 	@echo "✓ Checkstyle passed (rustfmt + clippy)"
+
+bench:
+	$(CARGO) bench --all-features --bench hot_paths
 
 # Parser fuzzing (nightly + cargo-fuzz). 60 s per target is a smoke run;
 # longer campaigns are run locally before a release.

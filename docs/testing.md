@@ -91,7 +91,30 @@ cargo +nightly fuzz run proxy_v2 -- -max_total_time=600
 
 ---
 
-## 3. Локальный integration-стенд (Docker)
+## 4. Бенчмарки горячего пути
+
+Микробенчмарки (criterion) для того, что выполняется на каждое соединение:
+
+```bash
+cargo bench --all-features --bench hot_paths
+# HTML-отчёт: target/criterion/report/index.html
+```
+
+Замеряются: `RateLimiter::check`, exact/CIDR/miss lookup в `Blacklist`, `SubnetDetector::evaluate`
+на окне из 256 префиксов и разбор HTTP request-head. Сравнивай медианы до/после изменения на
+одной машине; абсолютные числа зависят от CPU. Порядок величин на dev-машине (2 vCPU):
+
+| Бенчмарк | Медиана |
+|----------|---------|
+| `rate_limiter/check` | ~110 ns |
+| `blacklist/is_blocked_exact` | ~70 ns |
+| `blacklist/is_blocked_cidr` | ~220 ns |
+| `subnet_detector/evaluate_256` | ~2.6 µs |
+| `http_parser/evaluate` | ~280 ns |
+
+---
+
+## 5. Локальный integration-стенд (Docker)
 
 ```bash
 bash deploy/test/run_test.sh
@@ -102,7 +125,7 @@ attacker-контейнер. Сценарии — в [deploy/test/README.md](../
 
 ---
 
-## 4. Нагрузочное тестирование
+## 6. Нагрузочное тестирование
 
 ### Много-IP TCP flood на VDS (edge-only)
 
@@ -130,7 +153,7 @@ hping3 -S --flood -p 25565 --rand-source EDGE_IP   # только на свои 
 
 ---
 
-## 5. Метрики для проверки во время теста
+## 7. Метрики для проверки во время теста
 
 ```bash
 curl -s http://localhost:9090/metrics | grep rampart_
