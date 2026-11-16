@@ -31,6 +31,10 @@ impl Gateway {
 			adjuster.record_connection();
 			adjuster.current_difficulty()
 		};
+		// The configured difficulty is a hard floor even if the adjuster was
+		// constructed without it; recording the connection above still adapts
+		// the value for later peers.
+		let diff = diff.max(pow_config.difficulty);
 		let result = enforce_pow(client, peer_ip, diff).await?;
 		if !result {
 			metrics::POW_CHALLENGES_TOTAL.with_label_values(&["failed"]).inc();

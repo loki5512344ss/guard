@@ -52,9 +52,9 @@ audit:
 
 ebpf:
 	@echo "Building XDP/eBPF filter..."
-	mkdir -p $(TARGET_DIR)/xdp && \
-	clang -O2 -g -target bpf -c xdp/core/universal_filter.c -o $(TARGET_DIR)/xdp/universal_filter.o 2>/dev/null || \
-	echo "WARNING: clang+bpf not installed, skipping eBPF build"
+	mkdir -p $(TARGET_DIR)/xdp
+	clang -O2 -g -target bpf -I"/usr/include/$$(gcc -print-multiarch)" \
+		-c xdp/core/universal_filter.c -o $(TARGET_DIR)/xdp/universal_filter.o
 
 ebpf-clean:
 	rm -f $(TARGET_DIR)/xdp/universal_filter.o

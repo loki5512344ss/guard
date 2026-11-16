@@ -241,6 +241,61 @@ guard/
       `value_size` `.rodata` == `RODATA_SIZE`, без root) + перезапуск реального бинаря в netns
       (attach подтверждён), плюс весь `scripts/xdp_ipv6_smoke.sh`.
 
+## 2b. Ревью 2026-11-16 — качество и надёжность
+
+Четыре независимых ревью (XDP/загрузчик, data-path, фильтры/хранилища, API/конфиг/CI)
+и один раунд фиксов. Гейты после раунда: fmt, clippy `-D warnings`, `cargo test
+--all-features` (258 тестов), `--no-default-features` + тесты с `protocol-http`,
+module-size, secrets, `cargo deny`, rustdoc без warning'ов, clang+verifier,
+`xdp_ipv6_smoke.sh`, `xdp_pkt_test.sh`, живой attach в netns (native и generic).
+
+### Исправлено
+
+- XDP: длина TCP-payload по `ip->tot_len`/`payload_len` — на реальном NIC паддинг больше не
+  ломает `expected_seq` (было: каждое соединение умирало на 4-м сегменте). Регрессия —
+  `scripts/xdp_pkt_test.sh`.
+- XDP: чтение map-значения до `bpf_map_delete_elem` (UAF), сброс `fails`, TFO в `expected_seq`,
+  исправленный v6 SYN-ACK, `inc_drop()` на всех DROP-путях, per-CPU инкремент без atomic.
+- XDP: VLAN/QinQ до L3, фрагменты проверяются по blacklist, неизвестный non-SYN поток → PASS
+  («stateless-фильтр, не firewall»), `whitelist6_map`, whitelist до state machine.
+- XDP: протухшие префиксные баны удаляются userspace-reaper'ом раз в 60 с (пакетный путь
+  больше не пытается удалить `/24` ключом `/32`).
+- Загрузчик: запоминается фактический attach-флаг (native/skb) и проверяется detach;
+  `DetachGuard` откатывает attach при ошибке; whitelist из конфига грузится в карты;
+  `ban_cidr` валидирует и маскирует префикс; статистика знает все 13 счётчиков.
+- Security: `API_PASSWORD` не пустой и ≥16 символов, `JWT_SECRET` ≥32 непробельных,
+  `syn_challenge_enabled` требует свой `challenge_secret_hex`, compose без публичных
+  Redis/ClickHouse и без дефолтных паролей, пустой `CORS_ORIGIN` → deny.
+- Storage: ClickHouse с таймаутами и без lock через `.await` (bounded-буфер, метрика дропов),
+  Redis на `ConnectionManager` с таймаутами и реконнектом, баны из pubsub клампятся,
+  TOCTOU в blacklist, атомарный `replace_redis`.
+- Data path: backoff на `accept()`, корректный `shutdown.changed() == Err`, глобальный бюджет
+  соединений, rate-limit **до** PoW, whitelist не банится, таймауты connect/handshake/relay,
+  idle-таймаут relay.
+- Детекция: score считается до обновления baseline + гистерезис выхода из `UnderAttack`
+  (атака больше не «затухает» через тик); реальный cap и инкрементальная эвикция в
+  rate-limiter и репутации; IPv4-mapped ключи совпадают.
+- Blacklist: CIDR-баны хранятся диапазонами — `/24`/`/64` покрывают всю подсеть;
+  нормализация IPv4-mapped на входе и на lookup.
+- CI: джоба `cargo test --no-default-features --features protocol-http`, `make ebpf` больше
+  не глотает ошибки, secrets-гейт ловит слабые compose-дефолты.
+- `doctor` не дёргает защищённые ручки без токена и возвращает ненулевой код при провале.
+- Инлайн-тесты: 25 → 10 файлов (остальные — в следующих итерациях).
+
+### Осталось (следующий раунд)
+
+- [ ] API manager'а: `KEYS` → `SCAN`, batch `MGET` вместо N+1, ошибки Redis → 503 (а не
+      `200 []`), `DefaultBodyLimit`/`TimeoutLayer`, лимит длины `reason`, graceful shutdown,
+      эвикция login-лимитера, ключ по `X-Forwarded-For` за доверенным прокси.
+- [ ] `trusted_cidrs` + PROXY-header IP как ключ всех политик: банить/лимитировать по
+      transport-IP, header-IP — только после валидации (ban-amplification через LB).
+- [ ] XDP spoof-gate: `unique_sources = 0` на XDP-пути делает `Block` недостижимым —
+      либо counting в ядре, либо явная документация (сейчас логируется).
+- [ ] IPv6 bind в listener (`Domain::IPV4` + строковый парсинг адреса).
+- [ ] `relay_idle_timeout_secs` в `[limits]` (сейчас константа 300 с) и семафор бюджета
+      полем `Gateway` вместо `OnceLock`.
+- [ ] Оставшиеся инлайн-тесты (10 файлов) мигрировать в `tests/`.
+
 ## 3. Backlog
 
 - [ ] Мигрировать существующие инлайн-тесты (`#[cfg(test)]` в src/) в `tests/` —

@@ -28,6 +28,8 @@ rate_limit_burst = 10.0
 ban_duration_secs = 3600
 
 [store]
+# deploy/docker-compose.yml requires REDIS_PASSWORD; add it to the URL when the
+# edge uses that stack: redis://:PASSWORD@redis:6379/0
 redis_url = "redis://redis:6379/0"
 blacklist_cache_ttl_secs = 300
 clickhouse_url = ""

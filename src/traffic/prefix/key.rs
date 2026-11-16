@@ -17,17 +17,22 @@ pub struct PrefixKey {
 impl PrefixKey {
 	/// Builds the prefix key for an address (v4 maps to /24 in the first four
 	/// bytes, v6 maps to /64).
+	///
+	/// The address is normalised through [`prefix_of`] first, so an
+	/// IPv4-mapped IPv6 source (`::ffff:a.b.c.d`) produces exactly the same key
+	/// as the plain IPv4 address. XDP `prefix_stats` entries and the user-space
+	/// tracker therefore agree on the bucket of a dual-stack client.
 	#[must_use]
 	pub fn new(ip: IpAddr) -> Self {
 		let mut key = Self::default();
-		match ip {
+		match prefix_of(ip) {
 			IpAddr::V4(v4) => {
 				key.family = PREFIX_FAMILY_V4;
-				key.addr[..4].copy_from_slice(&masked_v4(v4).octets());
+				key.addr[..4].copy_from_slice(&v4.octets());
 			},
 			IpAddr::V6(v6) => {
 				key.family = PREFIX_FAMILY_V6;
-				key.addr.copy_from_slice(&masked_v6_segments(v6));
+				key.addr.copy_from_slice(&v6.octets());
 			},
 		}
 		key

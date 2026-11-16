@@ -92,11 +92,11 @@ max_header_bytes = 512
 | Переменная | Обязательна | По умолчанию | Описание |
 |------------|-------------|--------------|----------|
 | `REDIS_URL` | нет | `redis://127.0.0.1:6379/0` | Хранилище состояния |
-| `JWT_SECRET` | да | — | Минимум 32 байта |
+| `JWT_SECRET` | да | — | Минимум 32 непробельных байта |
 | `JWT_AUDIENCE` | нет | `rampart` | Audience JWT |
 | `JWT_EXPIRATION_SECS` | нет | `86400` | Время жизни токена |
-| `API_PASSWORD` | да | — | Пароль для `/api/v1/auth/login`; значение `changeme` запрещено |
-| `CORS_ORIGIN` | нет | `http://localhost:5173` | CORS; `*` или пусто — разрешить все |
+| `API_PASSWORD` | да | — | Пароль для `/api/v1/auth/login`, минимум 16 символов; `changeme` запрещён |
+| `CORS_ORIGIN` | нет | — (CORS выключен) | `*` — разрешить все источники; список через запятую; пусто/не задано — запретить cross-origin |
 
 Manager всегда слушает `0.0.0.0:8080`.
 
@@ -136,8 +136,20 @@ clang -O2 -g -target bpf -c xdp/core/universal_filter.c -o /tmp/universal_filter
 | `auto_ban_duration_secs` | `300` | Длительность авто-бана |
 | `auto_ban_conn_drop_fails` | `3` | Порог `conn->fails` для бана по `EVENT_CONN_DROP` |
 | `syn_challenge_enabled` | `false` | RST-challenge (Oubliette liveness proof) |
-| `challenge_secret_hex` | плейсхолдер | 128-битный hex-секрет challenge |
+| `challenge_secret_hex` | — (обязателен при `syn_challenge_enabled`) | 128-битный hex-секрет, например `openssl rand -hex 8`; встроенный плейсхолдер запрещён |
 | `challenge_timeout_ms` | `3000` | TTL pending-challenge |
+
+Поведение XDP-фильтра:
+
+- **Stateless-фильтр, не firewall.** Состояние conntrack ведётся только для TCP-соединений,
+  начатых с SYN. Пакет без состояния (non-SYN) пропускается: включение фильтра не рвёт
+  ответы на исходящие соединения самого демона и keep-alive от health-check'ов.
+- **VLAN/QinQ** (802.1Q и 802.1ad, до двух тегов) разбираются; **фрагменты** проверяются по
+  source-IP в blacklist и пропускаются (не дропаются), счётчик — `frag` в `stats_map`.
+- **Whitelist** из корневого `whitelist = [...]` загружается в XDP-карты (`whitelist_map`,
+  `whitelist6_map`) при attach и обходит state machine, throttle и баны.
+- **CIDR-баны**: XDP матчит по LPM-трие, userspace — по диапазонам адресов, поэтому бан
+  `/24` или `/64` покрывает всю подсеть.
 
 Покрытие семейств адресов:
 

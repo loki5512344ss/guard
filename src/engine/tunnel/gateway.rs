@@ -1,7 +1,16 @@
 //! Per-connection pipeline of the edge engine: filters, PoW gate, protocol
 //! handshake and upstream relay.
+//!
+//! The module root owns gateway construction and the entry point; the stages
+//! live in `pipeline` (filters, PoW, handshake, upstream), `admission`
+//! (reputation escalation, bans and events) and `relay` (idle-bounded relay).
 
+mod admission;
 mod challenge;
+mod pipeline;
+mod relay;
+
+pub use relay::RELAY_IDLE_TIMEOUT;
 
 #[cfg(feature = "protocol-minecraft")]
 use super::proxy;
@@ -12,17 +21,14 @@ use crate::engine::subnet::tracker::SubnetTracker;
 use crate::filter::blacklist::Blacklist;
 use crate::filter::connection_limit::ConnectionLimiter;
 use crate::filter::rate_limit::RateLimiter;
-use crate::metrics;
 use crate::protocol::ProtocolRegistry;
-use crate::store::clickhouse::{ClickHouseEvent, ClickHouseWriter};
+use crate::store::clickhouse::ClickHouseWriter;
 use crate::traffic::reputation::IpReputation;
 use crate::xdp::XdpFilter;
 use std::collections::HashSet;
 use std::net::IpAddr;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
-use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
 use tokio::sync::Mutex as TokioMutex;
 
@@ -55,7 +61,7 @@ impl Gateway {
 			allowed_1s,
 			registry,
 			subnet_tracker,
-			upstream_cursor: AtomicUsize::new(0),
+			upstream_cursor: std::sync::atomic::AtomicUsize::new(0),
 		}
 	}
 
@@ -69,25 +75,7 @@ impl Gateway {
 		let client_addr = if self.config.proxy_protocol.ingress_enabled {
 			#[cfg(feature = "protocol-minecraft")]
 			{
-				if !self
-					.config
-					.proxy_protocol
-					.trusted_cidrs
-					.iter()
-					.any(|cidr| cidr.contains(peer_addr.ip()))
-				{
-					return GatewayOutcome {
-						client_ip: None,
-						result: Err(anyhow::anyhow!("untrusted peer attempted inbound PROXY protocol")),
-					};
-				}
-				match proxy::read_v2_header(
-					&mut client,
-					Duration::from_millis(self.config.proxy_protocol.ingress_timeout_ms),
-					self.config.proxy_protocol.max_header_bytes,
-				)
-				.await
-				{
+				match proxy::resolve_client_addr(&self.config.proxy_protocol, &mut client, peer_addr).await {
 					Ok(client_addr) => client_addr,
 					Err(error) => {
 						return GatewayOutcome {
@@ -112,124 +100,6 @@ impl Gateway {
 		GatewayOutcome {
 			client_ip: Some(client_ip),
 			result,
-		}
-	}
-
-	async fn handle_client(
-		&self,
-		mut client: TcpStream,
-		peer_addr: std::net::SocketAddr,
-		client_addr: std::net::SocketAddr,
-	) -> anyhow::Result<()> {
-		let peer_ip = client_addr.ip();
-
-		if let Some(tracker) = &self.subnet_tracker {
-			tracker.record_connection(peer_ip);
-		}
-
-		if self.blacklist.is_blocked(peer_ip) {
-			metrics::CONNECTIONS_TOTAL.with_label_values(&["blocked"]).inc();
-			return Ok(());
-		}
-
-		let Some(_connection_permit) = self.connection_limiter.try_acquire(peer_ip) else {
-			self.block_rate_limit(peer_ip).await;
-			return Ok(());
-		};
-
-		if !self.pass_pow_gate(&mut client, peer_ip).await? {
-			return Ok(());
-		}
-
-		if !self.rate_limiter.check(peer_ip) {
-			self.block_rate_limit(peer_ip).await;
-			return Ok(());
-		}
-
-		let handler = self.registry.primary()?;
-		let handshake = match handler.handshake(&mut client).await {
-			Ok(handshake) => handshake,
-			Err(e) => {
-				tracing::debug!("handshake rejected from {peer_addr}: {e}");
-				metrics::CONNECTIONS_TOTAL.with_label_values(&["blocked"]).inc();
-				return Ok(());
-			},
-		};
-
-		metrics::CONNECTIONS_TOTAL.with_label_values(&["allowed"]).inc();
-		self.allowed_1s.fetch_add(1, Ordering::Relaxed);
-		self.reputation.record_good(peer_ip);
-
-		let mut backend = TcpStream::connect(self.next_upstream(&handshake.upstream.addr)).await?;
-		#[cfg(feature = "protocol-minecraft")]
-		if self.config.protocol.minecraft.enabled && self.config.protocol.minecraft.send_proxy_protocol {
-			let source = client_addr;
-			let destination = client.local_addr()?;
-			backend.write_all(&proxy::protocol_v2(source, destination)?).await?;
-		}
-		if !handshake.initial_backend_data.is_empty() {
-			backend.write_all(&handshake.initial_backend_data).await?;
-		}
-		tokio::io::copy_bidirectional(&mut client, &mut backend).await?;
-		Ok(())
-	}
-
-	fn next_upstream<'a>(&'a self, negotiated: &'a str) -> &'a str {
-		let upstreams = &self.config.backend.upstreams;
-		if upstreams.len() > 1 {
-			let idx = self.upstream_cursor.fetch_add(1, Ordering::Relaxed) % upstreams.len();
-			return upstreams[idx].as_str();
-		}
-		if let Some(first) = upstreams.first() {
-			return first.as_str();
-		}
-		negotiated
-	}
-
-	async fn block_rate_limit(&self, ip: IpAddr) {
-		metrics::RATE_LIMIT_HITS.with_label_values(&["hit"]).inc();
-		metrics::CONNECTIONS_TOTAL.with_label_values(&["blocked"]).inc();
-		self.reputation.record_bad(ip);
-		if self.reputation.score(ip) < -40 {
-			let duration_secs = Duration::from_secs(self.config.ban.ban_duration_secs);
-			self.blacklist.add(ip, duration_secs, "low_reputation");
-			if !self.config.proxy_protocol.ingress_enabled {
-				self.xdp_ban(ip, duration_secs.as_secs());
-			}
-			self.push_event("block", ip, "low_reputation").await;
-			tracing::info!("low reputation ban {ip}: rate-limit abuse");
-		}
-	}
-
-	fn xdp_ban(&self, ip: IpAddr, duration_secs: u64) {
-		let Some(xdp) = &self.xdp else {
-			return;
-		};
-		let prefix_len = if ip.is_ipv4() { 32 } else { 128 };
-		match xdp
-			.lock()
-			.expect("xdp lock poisoned")
-			.ban_cidr(ip, prefix_len, duration_secs)
-		{
-			Ok(()) => tracing::debug!("xdp ban {ip} for {duration_secs}s"),
-			Err(e) => tracing::warn!("xdp ban failed for {ip}: {e}"),
-		}
-	}
-
-	async fn push_event(&self, event_type: &str, ip: IpAddr, data_string: &str) {
-		let Some(writer) = &self.clickhouse else {
-			return;
-		};
-		let event = ClickHouseEvent {
-			timestamp: chrono::Utc::now(),
-			event_type: event_type.to_string(),
-			ip: ip.to_string(),
-			data_float: 0.0,
-			data_int: 0,
-			data_string: data_string.to_string(),
-		};
-		if let Err(e) = writer.lock().await.push(event).await {
-			tracing::debug!("clickhouse push error: {e}");
 		}
 	}
 }

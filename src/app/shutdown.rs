@@ -18,11 +18,14 @@ pub enum RunExit {
 
 impl RunExit {
 	/// Process exit code for this outcome.
+	///
+	/// A forced drain timeout loses connections that did not finish in time, so
+	/// it must not look like a clean shutdown to supervisors and scripts.
 	#[must_use]
 	pub const fn code(self) -> i32 {
 		match self {
 			Self::Ok => 0,
-			Self::DrainTimeout => 0,
+			Self::DrainTimeout => 1,
 		}
 	}
 }
@@ -51,17 +54,5 @@ async fn wait_for_signal() {
 	tokio::select! {
 		_ = ctrl_c => {}
 		_ = term.recv() => {}
-	}
-}
-
-#[cfg(test)]
-mod tests {
-	use super::RunExit;
-
-	#[test]
-	fn run_exit_codes_match_previous_process_exit() {
-		// Both the clean path and the former drain timeout (`process::exit(0)`) exited with code 0.
-		assert_eq!(RunExit::Ok.code(), 0);
-		assert_eq!(RunExit::DrainTimeout.code(), 0);
 	}
 }

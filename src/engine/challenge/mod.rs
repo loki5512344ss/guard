@@ -4,5 +4,5 @@
 mod difficulty;
 mod pow;
 
-pub use difficulty::DifficultyAdjuster;
+pub use difficulty::{DifficultyAdjuster, MAX_DIFFICULTY, MIN_DIFFICULTY};
 pub use pow::{Challenge, enforce, solve};

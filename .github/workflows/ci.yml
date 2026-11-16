@@ -49,6 +49,18 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y libelf-dev zlib1g-dev libbpf-dev clang linux-libc-dev
       - run: cargo test --all-features
 
+  rust-test-no-default-features:
+    name: Rust — test (no default features, protocol-http)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: sudo apt-get update && sudo apt-get install -y libelf-dev zlib1g-dev libbpf-dev clang linux-libc-dev
+      # Feature-gated code must actually run: without this job the
+      # `--no-default-features` combination is only type-checked, never tested.
+      - run: cargo test --no-default-features --features protocol-http
+
   repo-gates:
     name: Repo — module size & default secrets
     runs-on: ubuntu-latest

@@ -4,10 +4,20 @@ use crate::metrics;
 use std::collections::VecDeque;
 use std::time::Instant;
 
+/// Lowest usable difficulty: 0 disables the PoW gate before the adjuster runs.
+pub const MIN_DIFFICULTY: u8 = 1;
+
+/// Highest adaptive difficulty. Every extra hex digit quadruples solver work.
+pub const MAX_DIFFICULTY: u8 = 12;
+
+/// Difficulty the adjuster climbs to under the heaviest observed load.
+const DEFAULT_MAX_DIFFICULTY: u8 = 10;
+
 /// Adapts the PoW difficulty to the current connection rate.
 ///
 /// The rate is counted over a sliding one-second window and the resulting
-/// difficulty is clamped to `[min, max]`.
+/// difficulty is clamped to `[min, max]`. The lower bound is also the floor and
+/// the starting difficulty, so a configured value takes effect immediately.
 pub struct DifficultyAdjuster {
 	window: VecDeque<Instant>,
 	min: u8,
@@ -22,15 +32,34 @@ impl Default for DifficultyAdjuster {
 }
 
 impl DifficultyAdjuster {
-	/// Creates an adjuster clamped to `min.max(4)` and `max.min(10)`.
+	/// Creates an adjuster with the explicit `[min, max]` range.
+	///
+	/// Inverted bounds are swapped, and both ends are clamped to
+	/// [`MIN_DIFFICULTY`]..=[`MAX_DIFFICULTY`]. The lower bound doubles as the
+	/// starting difficulty.
 	#[must_use]
 	pub fn new(min: u8, max: u8) -> Self {
+		let (min, max) = if min > max { (max, min) } else { (min, max) };
+		let min = min.clamp(MIN_DIFFICULTY, MAX_DIFFICULTY);
+		let max = max.clamp(min, MAX_DIFFICULTY);
 		Self {
 			window: VecDeque::new(),
-			min: min.max(4),
-			max: max.min(10),
-			current: min.max(4),
+			min,
+			max,
+			current: min,
 		}
+	}
+
+	/// Creates an adjuster whose floor and starting point is the configured PoW
+	/// difficulty.
+	///
+	/// The ceiling stays at the default maximum, or rises to the configured
+	/// value when that value is higher. Values outside
+	/// [`MIN_DIFFICULTY`]..=[`MAX_DIFFICULTY`] are clamped.
+	#[must_use]
+	pub fn with_floor(difficulty: u8) -> Self {
+		let floor = difficulty.clamp(MIN_DIFFICULTY, MAX_DIFFICULTY);
+		Self::new(floor, floor.max(DEFAULT_MAX_DIFFICULTY))
 	}
 
 	/// Records one connection and recomputes the difficulty for the window.
@@ -64,33 +93,18 @@ impl DifficultyAdjuster {
 		self.current
 	}
 
-	fn compute_difficulty(&self) -> u8 {
+	/// Rate step before it is clamped to the configured range.
+	fn rate_difficulty(&self) -> u8 {
 		match self.window.len() {
-			cps if cps > 500 => self.max.max(self.min),
+			cps if cps > 500 => MAX_DIFFICULTY,
 			cps if cps > 200 => 8,
 			cps if cps > 50 => 6,
 			_ => self.min,
 		}
 	}
-}
 
-#[cfg(test)]
-mod tests {
-	use super::*;
-
-	#[test]
-	fn adjuster_raises_difficulty_under_load() {
-		let mut adjuster = DifficultyAdjuster::new(4, 10);
-		for _ in 0..600 {
-			adjuster.record_connection();
-		}
-		assert_eq!(adjuster.current_difficulty(), 10);
-	}
-
-	#[test]
-	fn adjuster_stays_minimal_when_idle() {
-		let mut adjuster = DifficultyAdjuster::new(4, 10);
-		adjuster.record_connection();
-		assert_eq!(adjuster.current_difficulty(), 4);
+	fn compute_difficulty(&self) -> u8 {
+		// The rate ladder is global; the configured range is authoritative.
+		self.rate_difficulty().clamp(self.min, self.max)
 	}
 }

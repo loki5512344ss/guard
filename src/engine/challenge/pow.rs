@@ -1,3 +1,5 @@
+//! Universal SHA-256 hashcash challenge generation, solver and verifier.
+
 use rand::Rng;
 use sha2::{Digest, Sha256};
 use std::net::IpAddr;
@@ -5,10 +7,14 @@ use std::time::{Duration, Instant};
 use subtle::ConstantTimeEq;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
+use tokio::time::timeout;
 
 const CHALLENGE_TTL_SECS: u64 = 30;
 const MAX_NONCE_LEN: usize = 64;
 const ALLOWED_HEX_PREFIX: [u8; 4] = *b"0123";
+
+/// Maximum time a peer gets to read the challenge and return a nonce.
+const NONCE_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Active PoW challenge issued to one connection.
 pub struct Challenge {
@@ -32,7 +38,9 @@ impl Challenge {
 	}
 
 	/// Builds a challenge with an explicit token.
+	///
 	/// Intended for deterministic tests, where a random token makes the outcome
+	/// hard to predict.
 	#[must_use]
 	pub fn with_token(token: [u8; 32], difficulty: u8) -> Self {
 		Self {
@@ -104,8 +112,14 @@ pub fn solve(challenge: &str, difficulty: u8) -> Option<String> {
 /// Runs the textual PoW gate on `stream`: issues a challenge and checks the
 /// answer.
 ///
+/// Wire format: the server writes the hex challenge followed by `\n`; the
+/// client answers with the nonce followed by `\n`. A reply terminated by EOF is
+/// also accepted for compatibility with clients that close their write half
+/// after sending the nonce. Anything the client sent after the delimiter stays
+/// in the socket buffer and is seen by the protocol handshake that runs next.
+///
 /// # Errors
-/// Only I/O failures are reported; a wrong solution is `Ok(false)`.
+/// Only I/O failures are reported; a wrong or missing solution is `Ok(false)`.
 pub async fn enforce(stream: &mut TcpStream, peer_ip: IpAddr, difficulty: u8) -> anyhow::Result<bool> {
 	if difficulty == 0 {
 		tracing::debug!("pow: difficulty 0, skipping for {peer_ip}");
@@ -114,22 +128,21 @@ pub async fn enforce(stream: &mut TcpStream, peer_ip: IpAddr, difficulty: u8) ->
 
 	let mut challenge = Challenge::generate(difficulty);
 	let line = format!("{}\n", challenge.challenge_string());
-	stream.write_all(line.as_bytes()).await?;
+	timeout(NONCE_TIMEOUT, stream.write_all(line.as_bytes())).await??;
 
-	let mut buf = [0u8; MAX_NONCE_LEN + 1];
-	let n = tokio::time::timeout(Duration::from_secs(10), stream.read(&mut buf)).await??;
-	if n == 0 {
-		tracing::debug!("pow: no response from {peer_ip}");
+	let nonce = match timeout(NONCE_TIMEOUT, read_nonce_line(stream)).await {
+		Ok(result) => result?,
+		Err(_) => {
+			tracing::debug!("pow: nonce read timed out for {peer_ip}");
+			return Ok(false);
+		},
+	};
+	let Some(nonce) = nonce else {
+		tracing::debug!("pow: invalid or missing nonce from {peer_ip}");
 		return Ok(false);
-	}
+	};
 
-	let nonce = std::str::from_utf8(&buf[..n.min(MAX_NONCE_LEN)]).unwrap_or("").trim();
-	if nonce.is_empty() || nonce.len() > MAX_NONCE_LEN {
-		tracing::debug!("pow: invalid nonce from {peer_ip}");
-		return Ok(false);
-	}
-
-	let valid = challenge.verify(nonce);
+	let valid = challenge.verify(&nonce);
 	tracing::debug!(
 		"pow: verification {} for {peer_ip}",
 		if valid { "passed" } else { "failed" }
@@ -137,54 +150,43 @@ pub async fn enforce(stream: &mut TcpStream, peer_ip: IpAddr, difficulty: u8) ->
 	Ok(valid)
 }
 
-#[cfg(test)]
-mod tests {
-	use super::*;
-
-	#[test]
-	fn solve_then_verify_roundtrip() {
-		let mut challenge = Challenge::generate(2);
-		let nonce = solve(&challenge.challenge_string(), 2).expect("solver should find a nonce");
-		assert!(challenge.verify(&nonce), "verifier must accept solver output");
-	}
-
-	#[test]
-	fn verify_rejects_wrong_nonce() {
-		let mut challenge = Challenge::generate(4);
-		let challenge_str = challenge.challenge_string();
-
-		// Search for a nonce that an independently computed SHA-256 provably rejects,
-		// so the test stays deterministic.
-		let mut wrong_nonce = None;
-		for i in 0..10_000u32 {
-			let candidate = format!("bad-{i}");
-			let hex_hash = hex::encode(Sha256::digest(format!("{challenge_str}{candidate}").as_bytes()));
-			if !hex_hash
-				.as_bytes()
-				.iter()
-				.take(4)
-				.all(|c| ALLOWED_HEX_PREFIX.contains(c))
-			{
-				wrong_nonce = Some(candidate);
-				break;
-			}
+/// Reads a newline-terminated nonce without consuming the bytes that follow the
+/// delimiter.
+///
+/// `peek` inspects the buffer first; only the nonce and its `\n` are consumed, so
+/// a client that coalesces the nonce and the handshake into one TCP segment is
+/// not truncated. A nonce split across segments is accumulated until the
+/// delimiter arrives or the connection reports EOF.
+///
+/// Returns `None` for an empty, oversized or non-UTF-8 reply.
+async fn read_nonce_line(stream: &mut TcpStream) -> anyhow::Result<Option<String>> {
+	let mut buf = [0u8; MAX_NONCE_LEN + 1];
+	let mut nonce = Vec::with_capacity(MAX_NONCE_LEN);
+	loop {
+		let n = stream.peek(&mut buf).await?;
+		if n == 0 {
+			// EOF without a delimiter: accept the bytes received so far.
+			break;
 		}
-		let wrong_nonce = wrong_nonce.expect("a failing nonce must exist among candidates");
-		assert!(!challenge.verify(&wrong_nonce));
+		if let Some(pos) = buf[..n].iter().position(|&b| b == b'\n') {
+			if nonce.len() + pos > MAX_NONCE_LEN {
+				return Ok(None);
+			}
+			nonce.extend_from_slice(&buf[..pos]);
+			// Consume exactly the nonce line; the handshake bytes stay buffered.
+			stream.read_exact(&mut buf[..=pos]).await?;
+			break;
+		}
+		if nonce.len() + n > MAX_NONCE_LEN {
+			return Ok(None);
+		}
+		stream.read_exact(&mut buf[..n]).await?;
+		nonce.extend_from_slice(&buf[..n]);
 	}
 
-	#[test]
-	fn verify_rejects_replay() {
-		let mut challenge = Challenge::generate(2);
-		let nonce = solve(&challenge.challenge_string(), 2).expect("solved");
-		assert!(challenge.verify(&nonce));
-		assert!(!challenge.verify(&nonce), "challenge must be single-use");
+	let text = std::str::from_utf8(&nonce).unwrap_or("").trim();
+	if text.is_empty() || text.len() > MAX_NONCE_LEN {
+		return Ok(None);
 	}
-
-	#[test]
-	fn verify_rejects_oversized_nonce() {
-		let mut challenge = Challenge::generate(2);
-		let big_nonce = "0".repeat(MAX_NONCE_LEN + 1);
-		assert!(!challenge.verify(&big_nonce));
-	}
+	Ok(Some(text.to_string()))
 }

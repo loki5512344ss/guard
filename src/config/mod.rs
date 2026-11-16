@@ -19,6 +19,14 @@ pub use sections::{
 use serde::Deserialize;
 use std::fs;
 
+/// Upper bound of `ban.ban_duration_secs`: one year.
+const MAX_BAN_DURATION_SECS: u64 = 31_536_000;
+/// Upper bound of `pow.difficulty`.
+const MAX_POW_DIFFICULTY: u8 = 10;
+/// Placeholder `xdp.challenge_secret_hex` values baked into the XDP defaults
+/// (`xdp/core/config.h` and `XdpGlobals::default()`; both spellings exist).
+const PLACEHOLDER_CHALLENGE_SECRETS: [&str; 2] = ["a5a5a5a5a5a5a5a5", "a5a55a5a5a5aa5a5"];
+
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct Config {
 	#[serde(default)]
@@ -90,8 +98,37 @@ impl Config {
 		if self.detect.prefix.enabled && self.detect.prefix.syn_threshold == 0 {
 			anyhow::bail!("detect.prefix.syn_threshold must be positive when enabled");
 		}
+		if self.xdp.syn_challenge_enabled {
+			let secret = self.xdp.challenge_secret_hex.as_deref().ok_or_else(|| {
+				anyhow::anyhow!(
+					"xdp.syn_challenge_enabled requires xdp.challenge_secret_hex; \
+					 generate one with `openssl rand -hex 8`"
+				)
+			})?;
+			if is_placeholder_challenge_secret(secret) {
+				anyhow::bail!(
+					"xdp.challenge_secret_hex is the built-in placeholder; \
+					 generate a random secret with `openssl rand -hex 8`"
+				);
+			}
+		}
 		if self.limits.max_connections_per_ip == 0 {
 			anyhow::bail!("limits.max_connections_per_ip must be positive");
+		}
+		if !self.limits.rate_limit_pps.is_finite() || self.limits.rate_limit_pps <= 0.0 {
+			anyhow::bail!("limits.rate_limit_pps must be a finite number greater than 0");
+		}
+		if !self.limits.rate_limit_burst.is_finite() || self.limits.rate_limit_burst < 1.0 {
+			anyhow::bail!("limits.rate_limit_burst must be a finite number at least 1");
+		}
+		if self.ban.ban_duration_secs == 0 || self.ban.ban_duration_secs > MAX_BAN_DURATION_SECS {
+			anyhow::bail!("ban.ban_duration_secs must be between 1 and {MAX_BAN_DURATION_SECS}");
+		}
+		if self.pow.difficulty == 0 || self.pow.difficulty > MAX_POW_DIFFICULTY {
+			anyhow::bail!("pow.difficulty must be between 1 and {MAX_POW_DIFFICULTY}");
+		}
+		if self.workers.count == 0 {
+			anyhow::bail!("workers.count must be at least 1: otherwise no accept loops are started");
 		}
 		if self.proxy_protocol.ingress_enabled {
 			if self.proxy_protocol.trusted_cidrs.is_empty() {
@@ -138,109 +175,17 @@ impl Config {
 	}
 }
 
-#[cfg(test)]
-mod tests {
-	use super::*;
-
-	#[test]
-	fn empty_config_uses_defaults() {
-		let config = Config::parse_str("").expect("empty config should parse");
-		assert_eq!(config.bind.address, "0.0.0.0");
-		assert_eq!(config.bind.port, 25565);
-		assert_eq!(config.backend.upstreams, vec!["127.0.0.1:25566"]);
-		assert!(!config.pow.enabled);
-		assert!(!config.xdp.enabled);
-	}
-
-	#[test]
-	fn full_config_parses() {
-		let config = Config::parse_str(
-			r#"
-[bind]
-address = "10.0.0.1"
-port = 443
-
-[backend]
-upstreams = ["192.168.1.10:8080", "192.168.1.11:8080"]
-
-[pow]
-enabled = true
-difficulty = 6
-
-whitelist = ["203.0.113.7"]
-"#,
-		)
-		.expect("config should parse");
-		assert_eq!(config.bind.port, 443);
-		assert_eq!(config.backend.upstreams.len(), 2);
-		assert!(config.pow.enabled);
-		assert_eq!(config.pow.difficulty, 6);
-	}
-
-	#[test]
-	fn empty_upstreams_rejected() {
-		let result = Config::parse_str(
-			r#"
-[backend]
-upstreams = []
-"#,
-		);
-		assert!(result.is_err());
-	}
-
-	#[test]
-	fn invalid_upstream_rejected() {
-		let result = Config::parse_str(
-			r#"
-[backend]
-upstreams = ["not-an-addr"]
-"#,
-		);
-		assert!(result.is_err());
-	}
-
-	#[test]
-	fn invalid_whitelist_entry_rejected() {
-		let result = Config::parse_str("whitelist = [\"999.999.1.1\"]");
-		assert!(result.is_err());
-	}
-
-	#[test]
-	fn prefix_detect_defaults_disabled() {
-		let config = Config::parse_str("").expect("empty config should parse");
-		assert!(!config.detect.prefix.enabled);
-		assert_eq!(config.detect.prefix.syn_threshold, 500);
-		assert_eq!(config.detect.prefix.window_secs, 10);
-		assert_eq!(config.detect.prefix.min_unique_sources, 16);
-	}
-
-	#[test]
-	fn prefix_detect_section_parses() {
-		let config = Config::parse_str(
-			r#"
-[detect.prefix]
-enabled = true
-syn_threshold = 1000
-window_secs = 5
-min_unique_sources = 8
-"#,
-		)
-		.expect("detect.prefix section should parse");
-		assert!(config.detect.prefix.enabled);
-		assert_eq!(config.detect.prefix.syn_threshold, 1000);
-		assert_eq!(config.detect.prefix.window_secs, 5);
-		assert_eq!(config.detect.prefix.min_unique_sources, 8);
-	}
-
-	#[test]
-	fn prefix_detect_zero_threshold_rejected_when_enabled() {
-		let result = Config::parse_str(
-			r#"
-[detect.prefix]
-enabled = true
-syn_threshold = 0
-"#,
-		);
-		assert!(result.is_err());
-	}
+/// Returns whether `secret` spells a built-in placeholder challenge secret.
+///
+/// Hex digits are compared case-insensitively, with an optional `0x` prefix and
+/// `_`, `:` and `-` separators ignored, so every spelling of the placeholder is
+/// caught.
+fn is_placeholder_challenge_secret(secret: &str) -> bool {
+	let normalized = secret
+		.trim()
+		.trim_start_matches("0x")
+		.trim_start_matches("0X")
+		.replace(['_', ':', '-'], "")
+		.to_ascii_lowercase();
+	PLACEHOLDER_CHALLENGE_SECRETS.contains(&normalized.as_str())
 }

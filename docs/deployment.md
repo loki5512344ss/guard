@@ -73,24 +73,34 @@ Paper и закрой backend-порт firewall-ом от всех, кроме R
 
 ```bash
 export REDIS_URL="redis://127.0.0.1:6379/0"
-export JWT_SECRET="$(openssl rand -hex 32)"   # минимум 32 байта
-export API_PASSWORD="не-changeme"             # дефолт запрещён
+export JWT_SECRET="$(openssl rand -hex 32)"   # минимум 32 байта без пробелов
+export API_PASSWORD="$(openssl rand -base64 24)"  # минимум 16 символов, дефолт запрещён
 cargo run --release --bin rampart-manager
 # API на 0.0.0.0:8080
 ```
+
+Manager refuses to start with an empty `API_PASSWORD`, a password shorter than
+16 characters, the default placeholder (which must not be `changeme`), or a
+`JWT_SECRET` with fewer than 32 non-whitespace bytes.
 
 Manager listens on all interfaces by default. Permit `8080` only from an admin
 VPN or specific admin addresses; do not expose the API to the public Internet.
 The same applies to Redis (`6379`) and monitoring endpoints such as Prometheus
 (`9090`), ClickHouse (`8123`/`9000`) and Grafana (`3000`). The sample Compose
-file publishes ClickHouse and Grafana ports on the host, so restrict them with
-the host firewall or change their port bindings before deploying on a public
-VDS. Redis has no published host port in that Compose file and is reachable
-only by containers on its Docker network unless you deliberately expose it.
+files bind published ClickHouse and Grafana ports to `127.0.0.1` only, so reach
+them through an SSH tunnel or a local admin session, never through the public
+interface. `deploy/docker-compose.yml` publishes no Redis port at all and the
+root `docker-compose.yml` binds it to loopback; both refuse to start unless
+`REDIS_PASSWORD` and `GRAFANA_PASSWORD` are set. Cross-origin access to the
+manager API is disabled unless `CORS_ORIGIN` is set explicitly (`*` or a
+comma-separated origin list).
 
-Инфраструктура (Redis, ClickHouse, Grafana):
+Инфраструктура (Redis, ClickHouse, Grafana) требует пароли из окружения —
+Compose не стартует без них:
 
 ```bash
+export REDIS_PASSWORD="$(openssl rand -base64 24)"
+export GRAFANA_PASSWORD="$(openssl rand -base64 24)"
 docker compose up -d redis clickhouse grafana
 ```
 
@@ -103,11 +113,24 @@ Redis только через private network/VPN; при пустом `redis_ur
 ## 5. Docker
 
 ```bash
+# Пароли обязательны: без REDIS_PASSWORD/GRAFANA_PASSWORD Compose падает
+export REDIS_PASSWORD="$(openssl rand -base64 24)"
+export GRAFANA_PASSWORD="$(openssl rand -base64 24)"
+
 # Образ edge
 docker build -f deploy/docker/Dockerfile.edge -t rampart-edge .
 
 # Полный стек edge + инфраструктура
 docker compose -f deploy/docker-compose.yml up -d
+```
+
+Edge подключается к Redis по имени сервиса. Поскольку Redis в Compose требует
+пароль, впиши его в URL конфига edge (`deploy/config/edge-docker.toml`) — тот
+же пароль, что в `REDIS_PASSWORD`:
+
+```toml
+[store]
+redis_url = "redis://:PASSWORD@redis:6379/0"
 ```
 
 ## 6. Проверка после деплоя

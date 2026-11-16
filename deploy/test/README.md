@@ -70,4 +70,4 @@ rampart_attack_status
 ```
 
 ClickHouse (опционально): http://localhost:8123 — долгосрочное хранение событий.
-Grafana: http://localhost:3000 (admin/admin) — дашборды из `deploy/grafana/`.
+Grafana: http://localhost:3000 (логин `admin`, пароль из `GRAFANA_PASSWORD`) — дашборды из `deploy/grafana/`.

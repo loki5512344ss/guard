@@ -1,5 +1,13 @@
-use crate::filter::blacklist::Blacklist;
+//! Durable blacklist snapshot reconciliation.
+//!
+//! The snapshot is rebuilt from `rampart:blacklist` (set) and
+//! `rampart:blacklist:metadata` (hash) after every (re)subscribe and then
+//! swapped into the mirrored in-memory table.
+
+use crate::filter::blacklist::{Blacklist, MAX_BAN_DURATION_SECS};
+use crate::store::redis::connection::command;
 use redis::AsyncCommands;
+use redis::aio::ConnectionManager;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::Duration;
@@ -7,7 +15,6 @@ use std::time::Duration;
 const BLACKLIST_KEY: &str = "rampart:blacklist";
 const BLACKLIST_METADATA_KEY: &str = "rampart:blacklist:metadata";
 const LEGACY_BAN_DURATION_SECS: i64 = 300;
-const MAX_BAN_DURATION_SECS: i64 = 31_536_000;
 
 #[derive(Deserialize, Serialize)]
 struct BlacklistMetadata {
@@ -16,11 +23,15 @@ struct BlacklistMetadata {
 	reason: String,
 }
 
-/// Restore current durable bans after subscribing to the event channel.
-pub(super) async fn reconcile(client: &redis::Client, blacklist: &Blacklist) -> anyhow::Result<()> {
-	let mut conn = client.get_multiplexed_async_connection().await?;
-	let members: Vec<String> = redis::cmd("SMEMBERS").arg(BLACKLIST_KEY).query_async(&mut conn).await?;
-	let metadata: HashMap<String, String> = conn.hgetall(BLACKLIST_METADATA_KEY).await?;
+/// Restores current durable bans after subscribing to the event channel.
+///
+/// # Errors
+/// Returns an error when Redis is unreachable, a command times out or a
+/// recorded timestamp is outside the representable range.
+pub(super) async fn reconcile(manager: &ConnectionManager, blacklist: &Blacklist) -> anyhow::Result<()> {
+	let mut conn = manager.clone();
+	let members: Vec<String> = command(redis::cmd("SMEMBERS").arg(BLACKLIST_KEY).query_async(&mut conn)).await?;
+	let metadata: HashMap<String, String> = command(conn.hgetall(BLACKLIST_METADATA_KEY)).await?;
 	let now = chrono::Utc::now().timestamp();
 	let mut active = Vec::with_capacity(members.len());
 
@@ -39,22 +50,28 @@ pub(super) async fn reconcile(client: &redis::Client, blacklist: &Blacklist) -> 
 				None => continue,
 			},
 		};
-		if record.expires_at_unix <= now
-			|| chrono::DateTime::from_timestamp(record.created_at_unix, 0).is_none()
+		if chrono::DateTime::from_timestamp(record.created_at_unix, 0).is_none()
 			|| chrono::DateTime::from_timestamp(record.expires_at_unix, 0).is_none()
-			|| record.expires_at_unix.saturating_sub(now) > MAX_BAN_DURATION_SECS
 		{
 			continue;
 		}
-		let remaining = u64::try_from(record.expires_at_unix - now)?;
+		let remaining = record.expires_at_unix.saturating_sub(now);
+		if remaining <= 0 {
+			continue;
+		}
+		let remaining = u64::try_from(remaining)?;
+		if remaining > MAX_BAN_DURATION_SECS {
+			continue;
+		}
 		active.push((ip, Duration::from_secs(remaining), record.reason));
 	}
 	blacklist.replace_redis(active);
 	Ok(())
 }
 
+/// Backfills metadata for a ban written by an older manager.
 async fn legacy_record(
-	conn: &mut redis::aio::MultiplexedConnection,
+	conn: &mut ConnectionManager,
 	target: &str,
 	now: i64,
 ) -> anyhow::Result<Option<BlacklistMetadata>> {
@@ -63,15 +80,17 @@ async fn legacy_record(
 		expires_at_unix: now.saturating_add(LEGACY_BAN_DURATION_SECS),
 		reason: "legacy_unverified".to_string(),
 	};
-	let inserted: i64 = redis::cmd("HSETNX")
-		.arg(BLACKLIST_METADATA_KEY)
-		.arg(target)
-		.arg(serde_json::to_string(&legacy)?)
-		.query_async(conn)
-		.await?;
+	let inserted: i64 = command(
+		redis::cmd("HSETNX")
+			.arg(BLACKLIST_METADATA_KEY)
+			.arg(target)
+			.arg(serde_json::to_string(&legacy)?)
+			.query_async(conn),
+	)
+	.await?;
 	if inserted == 1 {
 		return Ok(Some(legacy));
 	}
-	let current: Option<String> = conn.hget(BLACKLIST_METADATA_KEY, target).await?;
+	let current: Option<String> = command(conn.hget(BLACKLIST_METADATA_KEY, target)).await?;
 	Ok(current.and_then(|value| serde_json::from_str(&value).ok()))
 }

@@ -3,6 +3,7 @@
 //! Owns [`AppState`], the handle shared by every handler through [`SharedState`].
 pub mod api;
 pub mod auth;
+pub mod security;
 pub mod sync;
 
 use dashmap::DashMap;

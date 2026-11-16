@@ -1,9 +1,37 @@
-//! Encoding of upstream PROXY protocol v2 headers.
+//! PROXY protocol v2 support: header encoding for the backend and strict
+//! parsing of headers injected by trusted ingress peers.
 
+use crate::config::ProxyProtocolConfig;
 use std::net::SocketAddr;
+use std::time::Duration;
+use tokio::net::TcpStream;
 
 mod inbound;
 pub(super) use inbound::read_v2_header;
+
+/// Resolves the effective client address from an inbound PROXY v2 header.
+///
+/// Only peers inside `config.trusted_cidrs` may inject a header; anyone else
+/// is rejected instead of being believed. The whole header must arrive within
+/// `config.ingress_timeout_ms` and fit in `config.max_header_bytes`.
+///
+/// # Errors
+/// Fails when the peer is not trusted, on timeout and on any header parse error.
+pub(super) async fn resolve_client_addr(
+	config: &ProxyProtocolConfig,
+	client: &mut TcpStream,
+	peer_addr: SocketAddr,
+) -> anyhow::Result<SocketAddr> {
+	if !config.trusted_cidrs.iter().any(|cidr| cidr.contains(peer_addr.ip())) {
+		anyhow::bail!("untrusted peer attempted inbound PROXY protocol");
+	}
+	read_v2_header(
+		client,
+		Duration::from_millis(config.ingress_timeout_ms),
+		config.max_header_bytes,
+	)
+	.await
+}
 
 /// Encodes a PROXY protocol v2 TCP header for the backend.
 ///

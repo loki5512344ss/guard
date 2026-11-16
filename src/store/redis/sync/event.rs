@@ -1,9 +1,13 @@
-use crate::filter::blacklist::Blacklist;
+//! Decoding and validation of blacklist events received from Redis.
+//!
+//! A remote or stale manager must not be able to ban an address for an
+//! arbitrary duration, so every ban is range-checked against
+//! [`MAX_BAN_DURATION_SECS`] before it reaches the in-memory table.
+
+use crate::filter::blacklist::{Blacklist, MAX_BAN_DURATION_SECS};
 use redis::Msg;
 use serde::Deserialize;
 use std::time::Duration;
-
-const MAX_BAN_DURATION_SECS: u64 = 31_536_000;
 
 #[derive(Deserialize)]
 struct BlacklistEvent {
@@ -27,31 +31,54 @@ pub(super) fn handle(msg: &Msg, blacklist: &Blacklist) -> anyhow::Result<()> {
 	match event.action.as_str() {
 		"ban" => {
 			let duration = match event.expires_at_unix {
-				Some(expires_at) => {
-					if chrono::DateTime::from_timestamp(expires_at, 0).is_none() {
-						anyhow::bail!("invalid blacklist event expiry timestamp");
-					}
-					let remaining = expires_at.saturating_sub(chrono::Utc::now().timestamp());
-					if remaining <= 0 {
-						blacklist.remove_redis(ip);
-						return Ok(());
-					}
-					let remaining = u64::try_from(remaining)?;
-					if remaining > MAX_BAN_DURATION_SECS {
-						anyhow::bail!("blacklist event expiry exceeds maximum duration");
-					}
-					Duration::from_secs(remaining)
-				},
-				None => Duration::from_secs(event.duration_secs),
+				Some(expires_at) => absolute_duration(expires_at)?,
+				None => checked_duration(event.duration_secs)?,
 			};
-			blacklist.add_redis(ip, duration, "manager_event");
-			tracing::info!("blacklist add via Redis: {}", event.ip);
+			match duration {
+				Some(duration) => {
+					blacklist.add_redis(ip, duration, "manager_event");
+					tracing::info!(ip = %event.ip, "blacklist add via Redis");
+				},
+				None => {
+					blacklist.remove_redis(ip);
+					tracing::info!(ip = %event.ip, "blacklist expiry already passed");
+				},
+			}
 		},
 		"unban" => {
 			blacklist.remove_redis(ip);
-			tracing::info!("blacklist remove via Redis: {}", event.ip);
+			tracing::info!(ip = %event.ip, "blacklist remove via Redis");
 		},
-		action => anyhow::bail!("unknown action: {action}"),
+		action => anyhow::bail!("unknown blacklist action: {action}"),
 	}
 	Ok(())
+}
+
+/// Converts an absolute expiry into the remaining ban duration.
+///
+/// Returns `Ok(None)` when the expiry is already in the past.
+fn absolute_duration(expires_at: i64) -> anyhow::Result<Option<Duration>> {
+	if chrono::DateTime::from_timestamp(expires_at, 0).is_none() {
+		anyhow::bail!("invalid blacklist event expiry timestamp");
+	}
+	let remaining = expires_at.saturating_sub(chrono::Utc::now().timestamp());
+	if remaining <= 0 {
+		return Ok(None);
+	}
+	let remaining = u64::try_from(remaining)?;
+	if remaining > MAX_BAN_DURATION_SECS {
+		anyhow::bail!("blacklist event expiry exceeds {MAX_BAN_DURATION_SECS}s");
+	}
+	Ok(Some(Duration::from_secs(remaining)))
+}
+
+/// Validates a relative ban duration.
+fn checked_duration(secs: u64) -> anyhow::Result<Option<Duration>> {
+	if secs > MAX_BAN_DURATION_SECS {
+		anyhow::bail!("blacklist event duration {secs}s exceeds {MAX_BAN_DURATION_SECS}s");
+	}
+	if secs == 0 {
+		return Ok(None);
+	}
+	Ok(Some(Duration::from_secs(secs)))
 }

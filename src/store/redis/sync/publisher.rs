@@ -1,6 +1,16 @@
+//! Publishes locally detected bans to Redis.
+//!
+//! Each ban is stored atomically (set member, metadata hash, event publish) via
+//! a Lua script on a shared reconnecting connection. Failed publishes retry
+//! with exponential backoff and abandon the event when shutdown is requested.
+
+use super::wait_for_shutdown;
 use crate::filter::blacklist::{Blacklist, LocalBanEvent};
+use crate::store::redis::backoff::{BACKOFF_MAX, BACKOFF_MIN, next_backoff};
+use crate::store::redis::connection::{command, connection_manager};
+use redis::aio::ConnectionManager;
 use serde::Serialize;
-use std::time::Duration;
+use std::sync::Arc;
 use tokio::sync::{broadcast, watch};
 
 const BLACKLIST_KEY: &str = "rampart:blacklist";
@@ -24,14 +34,16 @@ struct BanEvent<'a> {
 	reason: &'a str,
 }
 
+/// Publishes local bans and the current local snapshot until shutdown.
 pub async fn start_local_ban_publisher(
 	client: redis::Client,
-	blacklist: std::sync::Arc<Blacklist>,
+	blacklist: Arc<Blacklist>,
 	mut events: broadcast::Receiver<LocalBanEvent>,
 	mut shutdown: watch::Receiver<bool>,
 ) {
+	let mut manager: Option<ConnectionManager> = None;
 	for event in blacklist.local_snapshot() {
-		if !publish_with_retry(&client, event, &mut shutdown).await {
+		if !publish_with_retry(&client, &mut manager, event, &mut shutdown).await {
 			return;
 		}
 	}
@@ -40,14 +52,14 @@ pub async fn start_local_ban_publisher(
 		tokio::select! {
 			received = events.recv() => match received {
 				Ok(event) => {
-					if !publish_with_retry(&client, event, &mut shutdown).await {
+					if !publish_with_retry(&client, &mut manager, event, &mut shutdown).await {
 						return;
 					}
 				},
 				Err(broadcast::error::RecvError::Lagged(skipped)) => {
 					tracing::warn!(skipped, "local ban publisher lagged; reconciling active local bans");
 					for event in blacklist.local_snapshot() {
-						if !publish_with_retry(&client, event, &mut shutdown).await {
+						if !publish_with_retry(&client, &mut manager, event, &mut shutdown).await {
 							return;
 						}
 					}
@@ -63,19 +75,29 @@ pub async fn start_local_ban_publisher(
 	}
 }
 
+/// Publishes one event, retrying until it succeeds or shutdown is requested.
 async fn publish_with_retry(
 	client: &redis::Client,
+	manager: &mut Option<ConnectionManager>,
 	event: LocalBanEvent,
 	shutdown: &mut watch::Receiver<bool>,
 ) -> bool {
-	let mut delay = Duration::from_secs(1);
+	let mut delay = BACKOFF_MIN;
 	loop {
-		match publish_ban(client, &event).await {
+		let result = tokio::select! {
+			result = publish_ban(client, manager, &event) => result,
+			() = wait_for_shutdown(shutdown) => return false,
+		};
+		match result {
 			Ok(()) => return true,
-			Err(error) => tracing::warn!(%error, ip = %event.ip, "failed to persist local ban; retrying"),
+			Err(error) => {
+				// Force a reconnect on the next attempt.
+				*manager = None;
+				tracing::warn!(%error, ip = %event.ip, "failed to persist local ban; retrying");
+			},
 		}
 		tokio::select! {
-			_ = tokio::time::sleep(delay) => delay = (delay * 2).min(Duration::from_secs(30)),
+			_ = tokio::time::sleep(delay) => delay = next_backoff(delay, BACKOFF_MAX),
 			changed = shutdown.changed() => {
 				if changed.is_err() || *shutdown.borrow_and_update() {
 					return false;
@@ -85,7 +107,11 @@ async fn publish_with_retry(
 	}
 }
 
-async fn publish_ban(client: &redis::Client, event: &LocalBanEvent) -> anyhow::Result<()> {
+async fn publish_ban(
+	client: &redis::Client,
+	manager: &mut Option<ConnectionManager>,
+	event: &LocalBanEvent,
+) -> anyhow::Result<()> {
 	let now = chrono::Utc::now().timestamp();
 	let remaining = event.expires_at_unix.saturating_sub(now);
 	if remaining <= 0 {
@@ -103,17 +129,26 @@ async fn publish_ban(client: &redis::Client, event: &LocalBanEvent) -> anyhow::R
 		expires_at_unix: event.expires_at_unix,
 		reason: &event.reason,
 	})?;
-	let mut conn = client.get_multiplexed_async_connection().await?;
-	let _: i64 = redis::cmd("EVAL")
-		.arg(STORE_BAN_SCRIPT)
-		.arg(3)
-		.arg(BLACKLIST_KEY)
-		.arg(BLACKLIST_METADATA_KEY)
-		.arg(BLACKLIST_CHANNEL)
-		.arg(event.ip.to_string())
-		.arg(metadata)
-		.arg(payload)
-		.query_async(&mut conn)
-		.await?;
+	let mut conn = match manager {
+		Some(conn) => conn.clone(),
+		None => {
+			let conn = connection_manager(client).await?;
+			*manager = Some(conn.clone());
+			conn
+		},
+	};
+	let _: i64 = command(
+		redis::cmd("EVAL")
+			.arg(STORE_BAN_SCRIPT)
+			.arg(3)
+			.arg(BLACKLIST_KEY)
+			.arg(BLACKLIST_METADATA_KEY)
+			.arg(BLACKLIST_CHANNEL)
+			.arg(event.ip.to_string())
+			.arg(metadata)
+			.arg(payload)
+			.query_async(&mut conn),
+	)
+	.await?;
 	Ok(())
 }

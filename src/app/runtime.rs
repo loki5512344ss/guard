@@ -132,6 +132,9 @@ pub async fn run() -> anyhow::Result<RunExit> {
 	let subnet_tracker = start_subnet_tracker(&config);
 	monitor::spawn(
 		&config.detect.prefix,
+		Duration::from_secs(config.ban.ban_duration_secs),
+		blacklist.clone(),
+		!config.proxy_protocol.ingress_enabled,
 		subnet_tracker.clone(),
 		xdp_filter.clone(),
 		shutdown_rx.clone(),
@@ -190,7 +193,9 @@ pub async fn run() -> anyhow::Result<RunExit> {
 	tracing::info!("Rampart edge starting on {}:{}", config.bind.address, config.bind.port);
 	tracing::info!("Upstreams: {:?}", config.backend.upstreams);
 
-	let adjuster = Arc::new(Mutex::new(DifficultyAdjuster::default()));
+	// The configured difficulty is the floor and the starting point; the
+	// adjuster only raises it under load.
+	let adjuster = Arc::new(Mutex::new(DifficultyAdjuster::with_floor(config.pow.difficulty)));
 	let gateway = Arc::new(Gateway::new(
 		config.clone(),
 		rate_limiter,
