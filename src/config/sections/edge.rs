@@ -1,8 +1,7 @@
 //! Edge sections: bind, backend, workers, limits, ban, PoW and PROXY protocol.
 
+use crate::config::trusted::TrustedProxyCidr;
 use serde::{Deserialize, Deserializer};
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
-use std::str::FromStr;
 
 /// `[bind]` section: listen address and port of the edge node.
 #[derive(Debug, Clone, Deserialize)]
@@ -157,66 +156,6 @@ impl Default for PowConfig {
 }
 fn default_pow_difficulty() -> u8 {
 	4
-}
-
-/// CIDR network allowed to send inbound PROXY protocol headers.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct TrustedProxyCidr {
-	network: IpAddr,
-	prefix_len: u8,
-}
-
-impl TrustedProxyCidr {
-	/// Returns whether `ip` belongs to this network.
-	#[must_use]
-	pub fn contains(&self, ip: IpAddr) -> bool {
-		// Masks are family-specific: a prefix above 32 would underflow the v4 shift.
-		let prefix = self.prefix_len;
-		match (self.network, ip) {
-			(IpAddr::V4(net), IpAddr::V4(ip)) => u32::from(net) & mask_v4(prefix) == u32::from(ip) & mask_v4(prefix),
-			(IpAddr::V6(net), IpAddr::V6(ip)) => u128::from(net) & mask_v6(prefix) == u128::from(ip) & mask_v6(prefix),
-			_ => false,
-		}
-	}
-}
-
-impl FromStr for TrustedProxyCidr {
-	type Err = String;
-
-	fn from_str(value: &str) -> Result<Self, Self::Err> {
-		let (address, prefix) = value.split_once('/').map_or((value, None), |(a, p)| (a, Some(p)));
-		let network = IpAddr::from_str(address).map_err(|_| format!("invalid trusted proxy CIDR: {value}"))?;
-		let max_prefix = if network.is_ipv4() { 32 } else { 128 };
-		let prefix_len = prefix
-			.map_or(Ok(max_prefix), |prefix| prefix.parse::<u8>())
-			.map_err(|_| format!("invalid trusted proxy CIDR prefix: {value}"))?;
-		if prefix_len > max_prefix {
-			return Err(format!("trusted proxy CIDR prefix is too large: {value}"));
-		}
-		let network = match network {
-			IpAddr::V4(ip) => IpAddr::V4(Ipv4Addr::from(u32::from(ip) & mask_v4(prefix_len))),
-			IpAddr::V6(ip) => IpAddr::V6(Ipv6Addr::from(u128::from(ip) & mask_v6(prefix_len))),
-		};
-		Ok(Self { network, prefix_len })
-	}
-}
-
-impl<'de> Deserialize<'de> for TrustedProxyCidr {
-	fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-	where
-		D: Deserializer<'de>,
-	{
-		let value = String::deserialize(deserializer)?;
-		value.parse().map_err(serde::de::Error::custom)
-	}
-}
-
-fn mask_v4(prefix: u8) -> u32 {
-	if prefix == 0 { 0 } else { u32::MAX << (32 - prefix) }
-}
-
-fn mask_v6(prefix: u8) -> u128 {
-	if prefix == 0 { 0 } else { u128::MAX << (128 - prefix) }
 }
 
 /// `[proxy_protocol]` section: inbound PROXY protocol ingestion.

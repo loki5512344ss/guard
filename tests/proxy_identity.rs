@@ -237,3 +237,25 @@ async fn plain_connection_uses_the_transport_peer() {
 	let outcome = handle_plain(&gateway, peer).await;
 	assert_eq!(outcome.client_ip, Some(peer.ip()));
 }
+
+#[test]
+fn trusted_network_overlap_checks_prefix_intersection() {
+	let net: TrustedProxyCidr = "10.0.0.0/8".parse().expect("cidr");
+	assert!(net.overlaps_prefix("10.1.2.0".parse().expect("ip"), 24), "same range");
+	assert!(
+		net.overlaps_prefix("10.0.0.0".parse().expect("ip"), 7),
+		"wider prefix overlaps"
+	);
+	assert!(
+		!net.overlaps_prefix("11.0.0.0".parse().expect("ip"), 8),
+		"sibling range"
+	);
+	assert!(
+		!net.overlaps_prefix("10.0.0.0".parse().expect("ip"), 0),
+		"/0 is rejected"
+	);
+
+	let v6: TrustedProxyCidr = "fd00::/8".parse().expect("cidr");
+	assert!(v6.overlaps_prefix("fd12::".parse().expect("ip"), 16));
+	assert!(!v6.overlaps_prefix("2001:db8::".parse().expect("ip"), 32));
+}

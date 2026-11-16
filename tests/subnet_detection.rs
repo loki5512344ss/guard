@@ -1,6 +1,6 @@
 //! Integration tests for subnet-level detection: tracker, detector and verdicts.
 
-use rampart::config::Config;
+use rampart::config::{Config, TrustedProxyCidr};
 use rampart::engine::subnet::monitor::enforce_tracker_verdicts;
 use rampart::engine::subnet_tracker::SubnetTracker;
 use rampart::filter::blacklist::Blacklist;
@@ -299,7 +299,7 @@ fn block_verdict(prefix: IpAddr) -> PrefixVerdict {
 fn trusted_tracker_block_reaches_the_blacklist_with_the_configured_ttl() {
 	let blacklist = Blacklist::new();
 	let verdicts = [block_verdict(v4([203, 0, 113, 0]))];
-	let banned = enforce_tracker_verdicts(&verdicts, &blacklist, Duration::from_secs(120), true);
+	let banned = enforce_tracker_verdicts(&verdicts, &blacklist, Duration::from_secs(120), true, &[]);
 	assert_eq!(banned, 1);
 	assert!(blacklist.is_blocked(v4([203, 0, 113, 0])));
 }
@@ -308,7 +308,7 @@ fn trusted_tracker_block_reaches_the_blacklist_with_the_configured_ttl() {
 fn untrusted_tracker_block_only_warns() {
 	let blacklist = Blacklist::new();
 	let verdicts = [block_verdict(v4([198, 51, 100, 0]))];
-	let banned = enforce_tracker_verdicts(&verdicts, &blacklist, Duration::from_secs(120), false);
+	let banned = enforce_tracker_verdicts(&verdicts, &blacklist, Duration::from_secs(120), false, &[]);
 	assert_eq!(banned, 0);
 	assert!(blacklist.is_empty());
 }
@@ -317,7 +317,7 @@ fn untrusted_tracker_block_only_warns() {
 fn tracker_ban_uses_the_given_duration() {
 	let blacklist = Blacklist::new();
 	let verdicts = [block_verdict(v4([192, 0, 2, 0]))];
-	enforce_tracker_verdicts(&verdicts, &blacklist, Duration::from_millis(1), true);
+	enforce_tracker_verdicts(&verdicts, &blacklist, Duration::from_millis(1), true, &[]);
 	std::thread::sleep(Duration::from_millis(2));
 	assert!(
 		!blacklist.is_blocked(v4([192, 0, 2, 0])),
@@ -331,7 +331,7 @@ fn non_block_verdicts_do_not_ban() {
 	let mut verdict = block_verdict(v4([203, 0, 113, 0]));
 	verdict.verdict = SubnetVerdict::Challenge;
 	assert_eq!(
-		enforce_tracker_verdicts(&[verdict], &blacklist, Duration::from_secs(60), true),
+		enforce_tracker_verdicts(&[verdict], &blacklist, Duration::from_secs(60), true, &[]),
 		0
 	);
 	assert!(blacklist.is_empty());
@@ -374,4 +374,24 @@ fn prefix_key_normalises_ipv4_mapped_addresses() {
 	);
 	assert_eq!(PrefixKey::new(mapped).to_prefix(), Some(prefix_of(mapped)));
 	assert_eq!(PrefixKey::new(mapped).to_prefix(), Some(v4([1, 2, 3, 0])));
+}
+
+#[test]
+fn tracker_block_is_suppressed_when_a_trusted_proxy_lives_in_the_prefix() {
+	let blacklist = Blacklist::new();
+	let verdicts = [block_verdict(v4([10, 9, 0, 0]))];
+	let trusted: Vec<TrustedProxyCidr> = vec!["10.9.0.5/32".parse().expect("trusted cidr")];
+	let banned = enforce_tracker_verdicts(&verdicts, &blacklist, Duration::from_secs(120), true, &trusted);
+	assert_eq!(banned, 0, "a ban covering a trusted proxy must be suppressed");
+	assert!(blacklist.is_empty());
+}
+
+#[test]
+fn tracker_block_still_applies_when_trusted_networks_do_not_overlap() {
+	let blacklist = Blacklist::new();
+	let verdicts = [block_verdict(v4([10, 9, 0, 0]))];
+	let trusted: Vec<TrustedProxyCidr> = vec!["192.0.2.0/24".parse().expect("trusted cidr")];
+	let banned = enforce_tracker_verdicts(&verdicts, &blacklist, Duration::from_secs(120), true, &trusted);
+	assert_eq!(banned, 1);
+	assert!(blacklist.is_blocked(v4([10, 9, 0, 7])));
 }

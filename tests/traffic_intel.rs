@@ -446,3 +446,33 @@ fn alerts_fire_only_on_state_transitions() {
 	assert!(alerts[0].message.contains("attack started"));
 	assert!(alerts[1].message.contains("attack ended"));
 }
+
+#[test]
+fn auto_ban_never_targets_a_trusted_proxy_network() {
+	let reputation = Arc::new(IpReputation::new());
+	let blacklist = Arc::new(Blacklist::new());
+	let trusted: Vec<rampart::config::TrustedProxyCidr> = vec!["10.0.0.0/8".parse().expect("trusted cidr")];
+	let hook =
+		TrafficHook::new(Arc::clone(&reputation), Arc::clone(&blacklist), autoban_cfg(true), 60).with_trusted(trusted);
+	let inside = ip([10, 1, 2, 3]);
+
+	for _ in 0..6 {
+		reputation.record_bad(inside);
+		hook.on_connection_end(inside);
+	}
+	assert!(
+		reputation.score(inside) <= -50,
+		"reputation must fall below the threshold"
+	);
+	assert_eq!(hook.ban_offenders(), 0, "trusted addresses are never banned");
+
+	let public = ip([198, 51, 100, 9]);
+	for _ in 0..6 {
+		reputation.record_bad(public);
+		hook.on_connection_end(public);
+	}
+	assert!(
+		blacklist.is_blocked(public),
+		"non-trusted offenders are still banned by the reputation path"
+	);
+}

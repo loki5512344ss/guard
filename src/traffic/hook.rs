@@ -25,6 +25,8 @@ pub struct TrafficHook {
 	autoban: DetectAutobanConfig,
 	ban_ttl_secs: u64,
 	conn_window: AtomicU64,
+	/// Trusted PROXY-protocol networks; addresses inside them are never banned.
+	trusted: Vec<crate::config::TrustedProxyCidr>,
 }
 
 impl TrafficHook {
@@ -40,7 +42,15 @@ impl TrafficHook {
 			autoban,
 			ban_ttl_secs,
 			conn_window: AtomicU64::new(0),
+			trusted: Vec::new(),
 		}
+	}
+
+	/// Marks the networks whose addresses must never be banned (trusted proxies).
+	#[must_use]
+	pub fn with_trusted(mut self, trusted: Vec<crate::config::TrustedProxyCidr>) -> Self {
+		self.trusted = trusted;
+		self
 	}
 
 	/// A new connection was accepted by the accept loop.
@@ -76,8 +86,9 @@ impl TrafficHook {
 			if self.blacklist.is_blocked(ip) {
 				continue;
 			}
-			self.ban(ip, BAN_REASON_ATTACK);
-			banned += 1;
+			if self.ban(ip, BAN_REASON_ATTACK) {
+				banned += 1;
+			}
 		}
 		banned
 	}
@@ -91,12 +102,21 @@ impl TrafficHook {
 		if self.reputation.score(ip) > self.autoban.reputation_threshold {
 			return;
 		}
-		self.ban(ip, reason);
+		let _ = self.ban(ip, reason);
 	}
 
-	fn ban(&self, ip: IpAddr, reason: &str) {
+	/// Bans `ip` unless it belongs to a trusted proxy network.
+	///
+	/// Returns whether the ban was actually installed.
+	fn ban(&self, ip: IpAddr, reason: &str) -> bool {
+		let host_prefix = if ip.is_ipv4() { 32 } else { 128 };
+		if self.trusted.iter().any(|net| net.overlaps_prefix(ip, host_prefix)) {
+			tracing::warn!(%ip, reason, "auto-ban suppressed: address belongs to a trusted proxy network");
+			return false;
+		}
 		self.blacklist.add(ip, Duration::from_secs(self.ban_ttl_secs), reason);
 		metrics::AUTO_BANS_TOTAL.with_label_values(&[reason]).inc();
 		tracing::warn!(%ip, reason, ttl_secs = self.ban_ttl_secs, "auto-ban issued by traffic intelligence");
+		true
 	}
 }

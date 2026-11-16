@@ -38,6 +38,9 @@ struct BanPolicy {
 	blacklist: Arc<Blacklist>,
 	ttl: Duration,
 	trusted: bool,
+	/// Trusted PROXY-protocol networks; a prefix ban overlapping one of them is
+	/// suppressed, because it would punish the proxy and every client behind it.
+	trusted_networks: Vec<crate::config::TrustedProxyCidr>,
 }
 
 /// Spawns the background subnet monitor when `[detect.prefix] enabled`.
@@ -46,22 +49,37 @@ struct BanPolicy {
 /// aggregator. Without either source the monitor stays disabled and logs a
 /// warning.
 ///
-/// `ban_ttl` comes from `[ban].ban_duration_secs`. `trusted_peer` is false when
-/// the observed address comes from an unverified ingress path (inbound PROXY
-/// protocol), where banning it could punish the transport proxy instead of the
-/// real client.
-pub fn spawn(
-	detect: &DetectPrefixConfig,
-	ban_ttl: Duration,
-	blacklist: Arc<Blacklist>,
-	trusted_peer: bool,
-	tracker: Option<Arc<SubnetTracker>>,
-	xdp: Option<Arc<Mutex<XdpFilter>>>,
-	mut shutdown: watch::Receiver<bool>,
-) {
+/// Everything the monitor task needs besides the detection config.
+pub struct MonitorSetup {
+	/// Ban lifetime, from `[ban].ban_duration_secs`.
+	pub ban_ttl: Duration,
+	/// Shared ban table.
+	pub blacklist: Arc<Blacklist>,
+	/// False when the observed address comes from an unverified ingress path
+	/// (inbound PROXY protocol), where banning it could punish the transport
+	/// proxy instead of the real client.
+	pub trusted_peer: bool,
+	/// Trusted proxy networks; a prefix ban overlapping one is suppressed.
+	pub trusted_networks: Vec<crate::config::TrustedProxyCidr>,
+	/// Userspace aggregator, used when XDP is not available.
+	pub tracker: Option<Arc<SubnetTracker>>,
+	/// Loaded XDP filter, preferred over the userspace tracker when present.
+	pub xdp: Option<Arc<Mutex<XdpFilter>>>,
+}
+
+/// Spawns the background subnet monitor when `[detect.prefix] enabled`.
+pub fn spawn(detect: &DetectPrefixConfig, setup: MonitorSetup, mut shutdown: watch::Receiver<bool>) {
 	if !detect.enabled {
 		return;
 	}
+	let MonitorSetup {
+		ban_ttl,
+		blacklist,
+		trusted_peer,
+		trusted_networks,
+		tracker,
+		xdp,
+	} = setup;
 	let Some(source) = build_source(tracker, xdp) else {
 		tracing::warn!("detect.prefix enabled but no stats source available; monitor disabled");
 		return;
@@ -72,6 +90,7 @@ pub fn spawn(
 		blacklist,
 		ttl: ban_ttl,
 		trusted: trusted_peer,
+		trusted_networks,
 	};
 
 	tokio::spawn(async move {
@@ -124,7 +143,7 @@ fn apply_verdicts(verdicts: &[PrefixVerdict], source: &Source, policy: &BanPolic
 	}
 	match source {
 		#[cfg(feature = "xdp")]
-		Source::Xdp(xdp) if policy.trusted => ban_xdp_verdicts(xdp, verdicts, policy.ttl),
+		Source::Xdp(xdp) if policy.trusted => ban_xdp_verdicts(xdp, verdicts, policy.ttl, &policy.trusted_networks),
 		#[cfg(feature = "xdp")]
 		Source::Xdp(_) => {
 			if verdicts.iter().any(|pv| pv.verdict == SubnetVerdict::Block) {
@@ -132,7 +151,13 @@ fn apply_verdicts(verdicts: &[PrefixVerdict], source: &Source, policy: &BanPolic
 			}
 		},
 		Source::Tracker(_) => {
-			enforce_tracker_verdicts(verdicts, &policy.blacklist, policy.ttl, policy.trusted);
+			enforce_tracker_verdicts(
+				verdicts,
+				&policy.blacklist,
+				policy.ttl,
+				policy.trusted,
+				&policy.trusted_networks,
+			);
 		},
 	}
 }
@@ -150,6 +175,7 @@ pub fn enforce_tracker_verdicts(
 	blacklist: &Blacklist,
 	ttl: Duration,
 	trusted: bool,
+	trusted_networks: &[crate::config::TrustedProxyCidr],
 ) -> usize {
 	let mut banned = 0;
 	for pv in verdicts.iter().filter(|pv| pv.verdict == SubnetVerdict::Block) {
@@ -157,6 +183,16 @@ pub fn enforce_tracker_verdicts(
 			tracing::warn!(
 				prefix = %pv.prefix,
 				"subnet block verdict on an untrusted peer path; not adding to the blacklist"
+			);
+			continue;
+		}
+		if trusted_networks
+			.iter()
+			.any(|net| net.overlaps_prefix(pv.prefix, prefix_len(pv.prefix)))
+		{
+			tracing::warn!(
+				prefix = %pv.prefix,
+				"subnet ban suppressed: the prefix contains a trusted proxy network"
 			);
 			continue;
 		}
@@ -172,8 +208,21 @@ pub fn enforce_tracker_verdicts(
 }
 
 #[cfg(feature = "xdp")]
-fn ban_xdp_verdicts(xdp: &XdpPrefixStats, verdicts: &[PrefixVerdict], ttl: Duration) {
+fn ban_xdp_verdicts(
+	xdp: &XdpPrefixStats,
+	verdicts: &[PrefixVerdict],
+	ttl: Duration,
+	trusted_networks: &[crate::config::TrustedProxyCidr],
+) {
 	for pv in verdicts.iter().filter(|pv| pv.verdict == SubnetVerdict::Block) {
+		let len = prefix_len(pv.prefix);
+		if trusted_networks.iter().any(|net| net.overlaps_prefix(pv.prefix, len)) {
+			tracing::warn!(
+				prefix = %pv.prefix,
+				"subnet kernel ban suppressed: the prefix contains a trusted proxy network"
+			);
+			continue;
+		}
 		let result = {
 			let guard = xdp.filter_lock();
 			guard.ban_cidr(pv.prefix, prefix_len(pv.prefix), ttl.as_secs())

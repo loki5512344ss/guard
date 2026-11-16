@@ -3,6 +3,7 @@
 //! Owns the [`Config`] root type, its serde defaults and the semantic validation
 //! that runs before the daemon binds a socket.
 mod sections;
+mod trusted;
 
 #[cfg(feature = "protocol-http")]
 pub use sections::HttpProtocolConfig;
@@ -12,9 +13,9 @@ pub use sections::MinecraftProtocolConfig;
 pub use sections::ProtocolConfig;
 pub use sections::{
 	BackendConfig, BanConfig, BindConfig, DetectAlertConfig, DetectAutobanConfig, DetectConfig, DetectPrefixConfig,
-	LimitsConfig, LoggingConfig, MetricsConfig, PowConfig, ProxyProtocolConfig, StoreConfig, TrustedProxyCidr,
-	WorkerConfig, XdpConfig,
+	LimitsConfig, LoggingConfig, MetricsConfig, PowConfig, ProxyProtocolConfig, StoreConfig, WorkerConfig, XdpConfig,
 };
+pub use trusted::TrustedProxyCidr;
 
 use serde::Deserialize;
 use std::fs;

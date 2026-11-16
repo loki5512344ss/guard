@@ -64,12 +64,15 @@ pub async fn run() -> anyhow::Result<RunExit> {
 	let blacklist = Arc::new(Blacklist::new());
 	let reputation = Arc::new(IpReputation::new());
 	let detector = Arc::new(Mutex::new(AttackDetector::new()));
-	let hook = Arc::new(TrafficHook::new(
-		reputation.clone(),
-		blacklist.clone(),
-		config.detect.autoban.clone(),
-		config.ban.ban_duration_secs,
-	));
+	let hook = Arc::new(
+		TrafficHook::new(
+			reputation.clone(),
+			blacklist.clone(),
+			config.detect.autoban.clone(),
+			config.ban.ban_duration_secs,
+		)
+		.with_trusted(config.proxy_protocol.trusted_cidrs.clone()),
+	);
 	let alert_dispatcher = AlertDispatcher::new();
 	let webhook_url = config.detect.alert.webhook_url.clone();
 	let allowed_1s = Arc::new(AtomicU64::new(0));
@@ -132,11 +135,14 @@ pub async fn run() -> anyhow::Result<RunExit> {
 	let subnet_tracker = start_subnet_tracker(&config);
 	monitor::spawn(
 		&config.detect.prefix,
-		Duration::from_secs(config.ban.ban_duration_secs),
-		blacklist.clone(),
-		!config.proxy_protocol.ingress_enabled,
-		subnet_tracker.clone(),
-		xdp_filter.clone(),
+		monitor::MonitorSetup {
+			ban_ttl: Duration::from_secs(config.ban.ban_duration_secs),
+			blacklist: blacklist.clone(),
+			trusted_peer: !config.proxy_protocol.ingress_enabled,
+			trusted_networks: config.proxy_protocol.trusted_cidrs.clone(),
+			tracker: subnet_tracker.clone(),
+			xdp: xdp_filter.clone(),
+		},
 		shutdown_rx.clone(),
 	);
 

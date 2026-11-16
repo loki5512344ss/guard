@@ -287,9 +287,10 @@ module-size, secrets, `cargo deny`, rustdoc без warning'ов, clang+verifier,
 
 ### Осталось
 
-- [ ] Monitor (`add_cidr`) и `traffic/hook` autoban не сверяются с `trusted_cidrs`: если
-      доверенный прокси физически живёт в банимой подсети, его адрес может попасть под
-      префиксный бан. Нужна общая проверка перед любым баном.
+- [x] Monitor (`add_cidr`) и `traffic/hook` autoban сверяются с `trusted_cidrs`: бан
+      подавляется, если префикс пересекается с доверенной сетью (`TrustedProxyCidr::overlaps_prefix`),
+      о чём пишется warn. Тесты: `tests/subnet_detection.rs`, `tests/traffic_intel.rs`,
+      `tests/proxy_identity.rs`.
 
 ### Сделано в этом раунде
 
