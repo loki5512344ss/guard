@@ -1,27 +1,32 @@
-use anyhow::{Context, Result, bail};
-use libbpf_rs::{MapCore, MapFlags, Object, ObjectBuilder, RingBuffer, Xdp, XdpFlags};
+use anyhow::{Context, Result};
+use libbpf_rs::{MapCore, Object, ObjectBuilder, RingBuffer, Xdp, XdpFlags};
 use std::os::unix::io::AsFd;
 use std::sync::Arc;
 
-use super::XdpStats;
 use super::globals::XdpGlobals;
 use crate::config::XdpConfig;
 use crate::filter::blacklist::Blacklist;
-use crate::traffic::prefix::{PrefixKey, PrefixStatsVal};
 
-use attach::{build_ringbuf, interface_cstr, patch_rodata, xdp_attach_mode_name};
-use events::AutoBanConfig;
+use attach::{attach_program, patch_rodata};
+use events::{AutoBanConfig, build_ringbuf};
 
 mod attach;
 pub(crate) mod events;
 mod maps;
 
-pub use maps::{blacklist6_key, monotonic_ns};
+pub use attach::{interface_cstr, is_rodata_map, xdp_attach_mode_name};
+pub use maps::{blacklist_key, blacklist6_key, normalize_cidr, whitelist_key, whitelist6_key};
 
 pub struct XdpFilter {
 	obj: Option<Object>,
 	ringbuf: Option<RingBuffer<'static>>,
 	ifindex: i32,
+	/// Raw `XdpFlags` bits of the slot the program was actually attached to
+	/// (libbpf-rs's `XdpFlags` is neither `Copy` nor `Clone`, so the bits are
+	/// stored and rebuilt with `from_bits_truncate`). The kernel may pick
+	/// generic (skb) mode after a failed native attach; detaching the native
+	/// slot in that case would leave an orphaned filter behind.
+	attach_flags: Option<u32>,
 	interface: String,
 	globals: XdpGlobals,
 	blacklist: Option<Arc<Blacklist>>,
@@ -34,6 +39,7 @@ impl XdpFilter {
 			obj: None,
 			ringbuf: None,
 			ifindex: 0,
+			attach_flags: None,
 			interface: interface.to_string(),
 			globals: XdpGlobals::default(),
 			blacklist: None,
@@ -56,6 +62,16 @@ impl XdpFilter {
 		self.autoban = AutoBanConfig::from_xdp(config);
 	}
 
+	/// Loads the object, attaches it and registers the ringbuf reader.
+	///
+	/// Fallible setup (`build_ringbuf`) runs before the attach, so a failure
+	/// there cannot leave a filter behind. Everything after the attach is
+	/// covered by an `attach::DetachGuard`: any early return detaches instead
+	/// of leaving an orphaned program that drops traffic without a reader.
+	///
+	/// # Errors
+	/// The environment probe, object load, map setup or attach failed. On an
+	/// attach failure no program is left installed.
 	pub fn load(&mut self) -> Result<()> {
 		// Diagnostics before loading: fail fast on an unsupported kernel or driver.
 		super::probe::preflight(&self.interface)?;
@@ -80,68 +96,65 @@ impl XdpFilter {
 		let ifindex = unsafe { libc::if_nametoindex(c_interface.as_ptr()) };
 		if ifindex == 0 {
 			let err = std::io::Error::last_os_error();
-			bail!("interface '{}' not found: {err}", self.interface);
+			anyhow::bail!("interface '{}' not found: {err}", self.interface);
 		}
-
-		let prog = obj
-			.progs()
-			.find(|p| p.name() == "rampart_universal_filter")
-			.context("XDP program 'rampart_universal_filter' not found")?;
-		let xdp = Xdp::new(prog.as_fd());
-		// Mode ladder: try native (drv) first; if the driver cannot handle it, fall back to
-		// generic (skb) with a warning (finding #1 of the competitive analysis: report the
-		// mode as it is, no window dressing).
-		let ifindex = ifindex as i32;
-		if let Err(e) = xdp.attach(ifindex, XdpFlags::NONE) {
-			tracing::warn!(
-				interface = %self.interface,
-				error = %e,
-				"native XDP attach failed, falling back to generic (skb) mode"
-			);
-			xdp.attach(ifindex, XdpFlags::SKB_MODE)
-				.context("XDP attach failed in both native and generic modes")?;
-		}
-		let mode = xdp
-			.query(ifindex, XdpFlags::NONE)
-			.map(|q| xdp_attach_mode_name(q.attach_mode))
-			.unwrap_or("unknown");
-
+		// The ringbuf is the only fallible post-attach step; building it first
+		// removes the failure mode entirely instead of relying on rollback.
 		super::metrics::init();
 		let rbuf = build_ringbuf(&obj, self.blacklist.clone(), self.autoban)?;
 
+		let (attach_flags, mode, guard) = attach_program(&obj, ifindex as i32, &self.interface)?;
+		guard.disarm();
+
 		self.obj = Some(obj);
 		self.ringbuf = Some(rbuf);
-		self.ifindex = ifindex;
+		self.ifindex = ifindex as i32;
+		self.attach_flags = Some(attach_flags);
 		tracing::info!("XDP filter attached to {} (mode: {mode})", self.interface);
 		Ok(())
 	}
 
+	/// Detaches the program from the interface and drops the ringbuf.
+	///
+	/// The stored attach flags select the slot the kernel actually used, and
+	/// the interface is queried afterwards: a detach that silently did
+	/// nothing (the old `XdpFlags::NONE` on a generic-mode program) must not
+	/// be reported as success.
+	///
+	/// # Errors
+	/// The detach failed or the interface still reports an attached program.
 	pub fn unload(&mut self) -> Result<()> {
-		let was_attached = self.obj.is_some();
-		let mut result = Ok(());
-		if let Some(obj) = self.obj.as_ref() {
-			result = self.detach_program(obj);
-		}
+		let Some(obj) = self.obj.as_ref() else {
+			self.ringbuf = None;
+			self.ifindex = 0;
+			self.attach_flags = None;
+			return Ok(());
+		};
+		let Some(flags) = self.attach_flags else {
+			anyhow::bail!("XDP state is inconsistent: object present without attach flags");
+		};
+		let result = self.detach_program(obj, flags);
 		self.ringbuf = None;
-		self.obj = None;
-		self.ifindex = 0;
-		if was_attached {
+		if result.is_ok() {
+			self.obj = None;
+			self.ifindex = 0;
+			self.attach_flags = None;
 			tracing::info!("XDP filter detached from {}", self.interface);
 		}
 		result
 	}
 
 	/// Detaches the XDP program using the real program fd owned by the loaded
-	/// `Object` (mirroring `load`'s `Xdp::new(prog.as_fd()).attach(..)`). A
-	/// detach failure while a filter is active is surfaced loudly and returned,
-	/// never swallowed — otherwise the kernel keeps dropping packets we no
-	/// longer intend to filter.
-	fn detach_program(&self, obj: &Object) -> Result<()> {
+	/// `Object`. A detach failure while a filter is active is surfaced loudly
+	/// and returned, never swallowed — otherwise the kernel keeps dropping
+	/// packets we no longer intend to filter.
+	fn detach_program(&self, obj: &Object, flags: u32) -> Result<()> {
 		let prog = obj
 			.progs()
 			.find(|p| p.name() == "rampart_universal_filter")
 			.context("XDP program 'rampart_universal_filter' not found while detaching")?;
-		if let Err(e) = Xdp::new(prog.as_fd()).detach(self.ifindex, XdpFlags::NONE) {
+		let xdp = Xdp::new(prog.as_fd());
+		if let Err(e) = xdp.detach(self.ifindex, XdpFlags::from_bits_truncate(flags)) {
 			tracing::error!(
 				interface = %self.interface,
 				ifindex = self.ifindex,
@@ -149,6 +162,19 @@ impl XdpFilter {
 				"XDP detach failed while filter was active"
 			);
 			return Err(e).with_context(|| format!("failed to detach XDP from '{}'", self.interface));
+		}
+		// Query every mode (`NONE`), not just the one we detached: only an
+		// attach mode of NONE proves the interface is clean.
+		let remaining = xdp
+			.query(self.ifindex, XdpFlags::NONE)
+			.context("failed to verify the XDP detach (query)")?
+			.attach_mode;
+		if remaining != 0 {
+			let mode = xdp_attach_mode_name(remaining);
+			anyhow::bail!(
+				"XDP program is still attached to '{}' after detach (mode: {mode})",
+				self.interface
+			);
 		}
 		Ok(())
 	}
@@ -159,60 +185,13 @@ impl XdpFilter {
 		}
 	}
 
-	fn find_map<'a>(&'a self, name: &str) -> Result<impl MapCore + 'a> {
+	pub(crate) fn find_map<'a>(&'a self, name: &str) -> Result<impl MapCore + 'a> {
 		self.obj
 			.as_ref()
 			.context("XDP not loaded")?
 			.maps()
 			.find(|m| m.name() == name)
 			.with_context(|| format!("map '{}' not found", name))
-	}
-
-	/// Reads the `prefix_stats` map (aggregates per /24 and /64 prefix).
-	///
-	/// # Errors
-	/// XDP is not loaded, the map is missing from the object, or a BPF read fails.
-	pub fn read_prefix_stats(&self) -> Result<Vec<(PrefixKey, PrefixStatsVal)>> {
-		let map = self.find_map("prefix_stats")?;
-		let mut out = Vec::new();
-		for key in map.keys() {
-			let Ok(kb) = <[u8; 24]>::try_from(key.as_slice()) else {
-				continue;
-			};
-			let Some(val) = map.lookup(&kb, MapFlags::ANY).context("prefix_stats lookup failed")? else {
-				continue;
-			};
-			let Ok(vb) = <[u8; 24]>::try_from(val.as_slice()) else {
-				continue;
-			};
-			out.push((PrefixKey::from_bytes(kb), PrefixStatsVal::from_bytes(vb)));
-		}
-		Ok(out)
-	}
-
-	pub fn get_stats(&self) -> Result<XdpStats> {
-		let map = self.find_map("stats_map")?;
-		let sum = |idx: u32| -> u64 {
-			let key = idx.to_le_bytes();
-			match map.lookup(&key, MapFlags::ANY) {
-				Ok(Some(v)) => v
-					.chunks_exact(8)
-					.map(|c| u64::from_le_bytes(c.try_into().expect("chunk size 8")))
-					.sum(),
-				_ => 0,
-			}
-		};
-		Ok(XdpStats {
-			total: sum(0),
-			tcp: sum(1),
-			whitelist: sum(2),
-			blacklist: sum(3),
-			syn_throttle: sum(4),
-			passed: sum(5),
-			dropped: sum(6),
-			udp: sum(7),
-			rate_limit: sum(8),
-		})
 	}
 }
 

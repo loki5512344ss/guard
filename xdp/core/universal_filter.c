@@ -5,12 +5,19 @@
  * owns, in this order:
  *
  *   1. No pure-ACK drop (prevents TCP handshake deadlock).
- *   2. LRU conntrack: SYN_RECEIVED to ESTABLISHED, with sequence tracking.
+ *   2. LRU conntrack, consulted only for new (SYN) connections. A non-SYN
+ *      segment with no tracked state passes: this is a stateless filter, not
+ *      a firewall, so spoofed SYNs cannot black-hole established flows and
+ *      ordinary replies are never dropped for lack of state.
  *   3. RST/FIN removes the conntrack entry, so no stale state survives.
  *   4. IPv6 support alongside IPv4.
- *   5. IP/CIDR blacklist and whitelist (LPM trie).
+ *   5. IP/CIDR blacklist and whitelist (LPM trie, IPv4 and IPv6).
  *   6. Per-IP SYN throttle, with invalid TCP flag combinations dropped.
  *   7. UDP policy from config.h: pass, drop or rate-limit.
+ *
+ * L2 decapsulation peels up to two VLAN tags before L3. IP fragments carry
+ * no inspectable ports, so they only get the source blacklist and then pass
+ * (dropping first fragments would break legitimate large datagrams).
  *
  * Deep payload inspection is delegated to an optional protocol hook (see
  * ../hooks/hook_api.h). Without a hook, established connections pass.
@@ -70,7 +77,12 @@ static __always_inline __u8 detect_tcp_bypass(struct tcphdr *tcp)
 }
 
 /**
- * Check the IPv4 blacklist and expire the entry on the way out.
+ * Check the IPv4 blacklist.
+ *
+ * The /32 lookup cannot address a wider /24 (or any other prefix) stored in
+ * the trie, so an expired entry is only ignored here; userspace reaps it
+ * with the prefix length it was created with. Deleting by /32 from the
+ * packet path used to leak every prefix ban until the trie filled up.
  *
  * @param src_ip  source address, network byte order
  * @param now     current bpf_ktime_get_ns() timestamp
@@ -82,17 +94,15 @@ static __always_inline __u8 is_blacklisted(__u32 src_ip, __u64 now)
     __u64 *ban_until = bpf_map_lookup_elem(&blacklist_map, &key);
     if (!ban_until)
         return 0;
-    if (*ban_until > now)
-        return 1;
-    bpf_map_delete_elem(&blacklist_map, &key); // expired — clean up
-    return 0;
+    return *ban_until > now;
 }
 
 /**
- * Check the IPv6 blacklist and expire the entry on the way out.
+ * Check the IPv6 blacklist.
  *
  * Key layout mirrors bpf_lpm_trie_key: prefixlen in host order followed by
- * 16 address bytes.
+ * 16 address bytes. Expired entries are ignored, never deleted here, for the
+ * same reason as in is_blacklisted().
  *
  * @param addr  16-byte source address, network byte order
  * @param now   current bpf_ktime_get_ns() timestamp
@@ -106,10 +116,7 @@ static __always_inline __u8 is_blacklisted6(const __u8 addr[16], __u64 now)
     __u64 *ban_until = bpf_map_lookup_elem(&blacklist6_map, &key);
     if (!ban_until)
         return 0;
-    if (*ban_until > now)
-        return 1;
-    bpf_map_delete_elem(&blacklist6_map, &key); // expired — clean up
-    return 0;
+    return *ban_until > now;
 }
 
 /**
@@ -218,8 +225,25 @@ int rampart_universal_filter(struct xdp_md *ctx)
     if ((void *)(eth + 1) > data_end)
         return XDP_PASS;
 
+    // Strip up to two VLAN tags (802.1Q / 802.1ad). Tagged frames used to hit
+    // the non-IP early return, which let a banned source bypass the blacklist
+    // with VLAN/QinQ encapsulation.
+    void *l3 = (void *)(eth + 1);
+    __u16 eth_proto = eth->h_proto;
+#pragma unroll
+    for (int i = 0; i < 2; i++) {
+        if (eth_proto != bpf_htons(ETH_P_8021Q) &&
+            eth_proto != bpf_htons(ETH_P_8021AD))
+            break;
+        struct rampart_vlan_hdr *vh = l3;
+        if ((void *)(vh + 1) > data_end)
+            return XDP_PASS;
+        eth_proto = vh->encap_proto;
+        l3 = (void *)(vh + 1);
+    }
+
     // Non-IP traffic: pass (ARP, etc.)
-    if (eth->h_proto != bpf_htons(ETH_P_IP) && eth->h_proto != bpf_htons(ETH_P_IPV6))
+    if (eth_proto != bpf_htons(ETH_P_IP) && eth_proto != bpf_htons(ETH_P_IPV6))
         return XDP_PASS;
 
     // Parse the IP header.
@@ -228,36 +252,48 @@ int rampart_universal_filter(struct xdp_md *ctx)
     __u8 l4_proto = 0;
     __u8 is_ipv6 = 0;
     __u8 native_v6 = 0;
+    __u8 is_fragment = 0;
     __u8 src6[16];
 
-    if (eth->h_proto == bpf_htons(ETH_P_IP)) {
-        struct iphdr *ip = (void *)(eth + 1);
+    if (eth_proto == bpf_htons(ETH_P_IP)) {
+        struct iphdr *ip = l3;
         if ((void *)(ip + 1) > data_end)
             return XDP_PASS;
-        if (ip->ihl < 5)
+        if (ip->ihl < 5) {
+            inc_drop();
             return XDP_DROP;
-
-        if (ip->protocol != IPPROTO_TCP && ip->protocol != IPPROTO_UDP)
-            return XDP_PASS;
-
-        // Non-sequential fragment: pass (can't inspect ports safely)
-        if (ip->frag_off & bpf_htons(IP_OFFSET))
-            return XDP_PASS;
-
-        // First fragment with MF: drop (can't reassemble)
-        if (ip->frag_off & bpf_htons(IP_MF))
-            return XDP_DROP;
+        }
 
         src_ip   = ip->saddr;
         dst_ip   = ip->daddr;
         l4_proto = ip->protocol;
+
+        // MF or a non-zero offset: this packet has no reliable L4 header.
+        // Both first and later fragments are handled by the source blacklist
+        // below and then passed; dropping first fragments would break
+        // legitimate large datagrams.
+        if (ip->frag_off & bpf_htons(IP_OFFSET | IP_MF)) {
+            is_fragment = 1;
+        } else if (ip->protocol != IPPROTO_TCP && ip->protocol != IPPROTO_UDP) {
+            return XDP_PASS;
+        }
     } else {
-        struct ipv6hdr *ip6 = (void *)(eth + 1);
+        struct ipv6hdr *ip6 = l3;
         if ((void *)(ip6 + 1) > data_end)
             return XDP_PASS;
 
-        if (ip6->nexthdr != IPPROTO_TCP && ip6->nexthdr != IPPROTO_UDP)
+        // Keep the full address for the IPv6 whitelist and blacklist even
+        // when it is IPv4-mapped; the low 32 bits are used for flow keys.
+        __builtin_memcpy(src6, &ip6->saddr, 16);
+        is_ipv6  = 1;
+        l4_proto = ip6->nexthdr;
+
+        // A fragment header hides the L4 header; same policy as IPv4.
+        if (ip6->nexthdr == IPPROTO_FRAGMENT) {
+            is_fragment = 1;
+        } else if (ip6->nexthdr != IPPROTO_TCP && ip6->nexthdr != IPPROTO_UDP) {
             return XDP_PASS; // extension headers not walked
+        }
 
         // Use IPv4-mapped IPv6 address for flow key (::ffff:0:0/96)
         if (ip6->saddr.in6_u.u6_addr32[0] != 0 ||
@@ -270,17 +306,50 @@ int rampart_universal_filter(struct xdp_md *ctx)
             // separately after the generic L4/port gates and must never
             // touch the IPv4 maps.
             native_v6 = 1;
-            is_ipv6   = 1;
-            l4_proto  = ip6->nexthdr;
-            __builtin_memcpy(src6, &ip6->saddr, 16);
         } else {
             // Source address must come from saddr, never daddr, or the
             // filter would track the server instead of the client.
             src_ip   = ip6->saddr.in6_u.u6_addr32[3];
             dst_ip   = ip6->daddr.in6_u.u6_addr32[3];
-            l4_proto = ip6->nexthdr;
-            is_ipv6  = 1;
         }
+    }
+
+    __u64 now = bpf_ktime_get_ns();
+
+    // Whitelist check (LPM trie), before the port gate, conntrack and both
+    // blacklists: a whitelisted source must truly bypass the state machine.
+    if (is_ipv6) {
+        struct lpm_key6 wl6 = {};
+        wl6.prefixlen = 128;
+        __builtin_memcpy(wl6.addr, src6, 16);
+        if (bpf_map_lookup_elem(&whitelist6_map, &wl6)) {
+            inc_whitelist();
+            return XDP_PASS;
+        }
+    } else {
+        struct lpm_key wl = { .prefixlen = 32, .ip = src_ip };
+        if (bpf_map_lookup_elem(&whitelist_map, &wl)) {
+            inc_whitelist();
+            return XDP_PASS;
+        }
+    }
+
+    // Fragments: the L4 ports are missing or incomplete, so the stateful and
+    // throttle logic cannot run. Apply the source blacklist and pass; the
+    // dedicated counter keeps this deliberate bypass observable.
+    if (is_fragment) {
+        __u8 banned = native_v6 ? is_blacklisted6(src6, now)
+                                : is_blacklisted(src_ip, now);
+        if (banned) {
+            inc_blacklist();
+            inc_drop();
+            if (!native_v6 && G_FEATURE_EVENTS)
+                push_event(EVENT_BAN, src_ip, 0);
+            return XDP_DROP;
+        }
+        inc_fragment_bypass();
+        inc_pass();
+        return XDP_PASS;
     }
 
     // Parse the L4 header.
@@ -288,19 +357,19 @@ int rampart_universal_filter(struct xdp_md *ctx)
     void *l4;
 
     if (is_ipv6) {
-        struct ipv6hdr *ip6 = (void *)(eth + 1);
+        struct ipv6hdr *ip6 = l3;
         l4 = (void *)(ip6 + 1);
         ip_hdr_len = sizeof(struct ipv6hdr);
     } else {
-        struct iphdr *ip = (void *)(eth + 1);
+        struct iphdr *ip = l3;
         l4 = (void *)ip + (ip->ihl * 4);
         ip_hdr_len = ip->ihl * 4;
     }
 
     // Minimum L4 header per protocol: a short UDP datagram used to fall through
     // to XDP_PASS because the check was sized for TCP, letting it bypass the
-    // blacklist entirely. IPv6 native fragmentation is already filtered above
-    // (nexthdr must be TCP/UDP), so a short UDP header here is a real datagram.
+    // blacklist entirely. Fragments were already handled above (source
+    // blacklist only), so a short UDP header here is a real datagram.
     __u32 min_l4 = (l4_proto == IPPROTO_TCP) ? sizeof(struct tcphdr)
                                              : sizeof(struct udphdr);
     if ((void *)l4 + min_l4 > data_end)
@@ -320,8 +389,6 @@ int rampart_universal_filter(struct xdp_md *ctx)
         inc_tcp();
     else
         inc_udp();
-
-    __u64 now = bpf_ktime_get_ns();
 
     // Native IPv6: blacklist plus cheap L4 policy (no stateful v6 yet).
     if (native_v6) {
@@ -360,13 +427,6 @@ int rampart_universal_filter(struct xdp_md *ctx)
         struct tcphdr *tcp6 = (struct tcphdr *)l4;
         update_prefix_stats(&pkey6, (tcp6->syn && !tcp6->ack) ? 1 : 0, now);
         inc_pass();
-        return XDP_PASS;
-    }
-
-    // Whitelist check (CIDR), before any filtering.
-    struct lpm_key wl_key = { .prefixlen = 32, .ip = src_ip };
-    if (bpf_map_lookup_elem(&whitelist_map, &wl_key)) {
-        inc_whitelist();
         return XDP_PASS;
     }
 
@@ -414,23 +474,52 @@ int rampart_universal_filter(struct xdp_md *ctx)
         return XDP_DROP;
     }
 
-    // TCP header length check
-    if (tcp->doff < 5)
+    // TCP header length check.
+    if (tcp->doff < 5) {
+        inc_drop();
         return XDP_DROP;
+    }
     __u8 tcp_hdr_len = tcp->doff * 4;
-    if ((void *)data + sizeof(struct ethhdr) + ip_hdr_len + tcp_hdr_len > data_end)
+    if ((void *)l4 + tcp_hdr_len > data_end) {
+        inc_drop();
         return XDP_DROP;
+    }
 
     // Per-prefix stats key (/24), built once after blacklist and bypass drops.
     struct prefix_key pkey;
     prefix_key_from_v4(&pkey, src_ip);
 
-    // Compute payload pointers
+    // The payload window is bounded by the IP header length field, not by
+    // data_end: a real NIC pads the last frame to the 60-byte Ethernet
+    // minimum, so counting to data_end would treat the padding as payload,
+    // drift expected_seq and drop the connection after a few segments. The
+    // frame can still be shorter than the IP header claims, so cap at
+    // data_end as well.
+    __u32 l4_len;
+    if (is_ipv6) {
+        struct ipv6hdr *ip6 = l3;
+        l4_len = sizeof(struct ipv6hdr) + bpf_ntohs(ip6->payload_len);
+    } else {
+        struct iphdr *ip = l3;
+        __u16 tot_len = bpf_ntohs(ip->tot_len);
+        if (tot_len < ip_hdr_len) {
+            inc_drop();
+            return XDP_DROP;
+        }
+        l4_len = (__u32)(tot_len - ip_hdr_len);
+    }
+
+    __u32 frame_l4 = (__u32)((__u8 *)data_end - (__u8 *)l4);
+    if (l4_len > frame_l4)
+        l4_len = frame_l4;
+    if (l4_len < tcp_hdr_len) {
+        inc_drop();
+        return XDP_DROP;
+    }
+
+    __u32 tcp_payload_len = l4_len - tcp_hdr_len;
     __u8 *tcp_payload = (__u8 *)tcp + tcp_hdr_len;
-    __u8 *tcp_payload_end = (__u8 *)data_end;
-    __s32 tcp_payload_len = (__s32)(tcp_payload_end - tcp_payload);
-    if (tcp_payload_len < 0)
-        tcp_payload_len = 0;
+    __u8 *tcp_payload_end = tcp_payload + tcp_payload_len;
 
     // Build the flow key.
     struct flow_key flow = {
@@ -458,8 +547,14 @@ int rampart_universal_filter(struct xdp_md *ctx)
         // Placed after throttle and blacklist so abusive sources never get a
         // reply, mirroring the prefix_stats ordering.
         if (G_SYN_CHALLENGE_ENABLED) {
-            int cv = chal_on_syn(ctx, eth, (void *)(eth + 1), is_ipv6,
-                                 tcp, &flow, now);
+            // The challenge reply is rebuilt as a bare 20-byte IPv4 header,
+            // so an IPv4 SYN with options cannot be answered without shipping
+            // a malformed SYN-ACK. Drop it (counted) instead.
+            if (!is_ipv6 && ((struct iphdr *)l3)->ihl != 5) {
+                inc_drop();
+                return XDP_DROP;
+            }
+            int cv = chal_on_syn(ctx, eth, l3, is_ipv6, tcp, &flow, now);
             if (cv != CHAL_CONTINUE)
                 return cv;
         }
@@ -467,10 +562,12 @@ int rampart_universal_filter(struct xdp_md *ctx)
         // Count SYN only after throttle passed (don't count throttled SYNs)
         update_prefix_stats(&pkey, 1, now);
 
-        // Create conntrack entry for new connection
+        // Create conntrack entry for new connection. A SYN may carry data
+        // (TCP Fast Open), which is acknowledged as part of the handshake;
+        // expected_seq must advance past it or the completing ACK is dropped.
         struct conntrack_entry ce = {};
         ce.state = STATE_SYN_RECEIVED;
-        ce.expected_seq = bpf_ntohl(tcp->seq) + 1; // expect ACK seq
+        ce.expected_seq = bpf_ntohl(tcp->seq) + 1 + tcp_payload_len;
         ce.src_ip = src_ip;
         ce.src_port = tcp->source;
         ce.last_seen = now;
@@ -499,9 +596,12 @@ int rampart_universal_filter(struct xdp_md *ctx)
 
     struct conntrack_entry *conn = bpf_map_lookup_elem(&conntrack_map, &flow);
     if (!conn) {
-        // Unknown connection — drop
-        inc_drop();
-        return XDP_DROP;
+        // Stateless filter, not a firewall: only new connections (SYN) are
+        // policed. An untracked non-SYN segment — a flow evicted under SYN
+        // pressure, a connection opened before attach, or the reply to the
+        // daemon's own outbound connection — passes instead of being dropped.
+        inc_pass();
+        return XDP_PASS;
     }
     conn->last_seen = now;
 
@@ -514,19 +614,28 @@ int rampart_universal_filter(struct xdp_md *ctx)
 
     // Sequence number tracking, established connections only.
     __u32 seq = bpf_ntohl(tcp->seq);
-    if (conn->state == STATE_ESTABLISHED && tcp_payload_len > 0 &&
-        seq != conn->expected_seq) {
-        conn->fails++;
-        if (conn->fails >= G_MAX_OUT_OF_ORDER) {
-            bpf_map_delete_elem(&conntrack_map, &flow);
-            inc_drop();
-            if (G_FEATURE_EVENTS)
-                push_event(EVENT_CONN_DROP, src_ip, conn->fails);
-            return XDP_DROP;
+    if (conn->state == STATE_ESTABLISHED && tcp_payload_len > 0) {
+        if (seq != conn->expected_seq) {
+            conn->fails++;
+            if (conn->fails >= G_MAX_OUT_OF_ORDER) {
+                // Copy the counter before deleting: the LRU element may be
+                // freed by bpf_map_delete_elem, so conn must not be read
+                // afterwards.
+                __u8 fails = conn->fails;
+                bpf_map_delete_elem(&conntrack_map, &flow);
+                inc_drop();
+                if (G_FEATURE_EVENTS)
+                    push_event(EVENT_CONN_DROP, src_ip, fails);
+                return XDP_DROP;
+            }
+            // Allow retransmission (don't update expected_seq)
+            inc_pass();
+            return XDP_PASS;
         }
-        // Allow retransmission (don't update expected_seq)
-        inc_pass();
-        return XDP_PASS;
+        // In-order segment: reset the reordering counter, so isolated
+        // reordered/retransmitted segments over the connection lifetime can
+        // never accumulate into a false positive.
+        conn->fails = 0;
     }
 
     // State machine.

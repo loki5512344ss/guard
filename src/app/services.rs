@@ -51,11 +51,12 @@ fn register_http(registry: &mut ProtocolRegistry, config: &Config) {
 }
 
 #[cfg(feature = "xdp")]
-pub(crate) fn start_xdp(
+pub fn start_xdp(
 	config: &Arc<Config>,
 	shutdown_rx: &watch::Receiver<bool>,
 	blacklist: &Arc<Blacklist>,
 ) -> anyhow::Result<Option<Arc<Mutex<XdpFilter>>>> {
+	use anyhow::Context as _;
 	use std::time::Duration;
 
 	use crate::xdp::XdpMetrics;
@@ -82,12 +83,28 @@ pub(crate) fn start_xdp(
 			);
 		}
 		guard.load()?;
+		// The kernel filter only honours its LPM whitelist, so a configured
+		// `whitelist` that fails to load is a startup error: silently dropping
+		// the entries would expose trusted peers to the XDP rules.
+		let whitelist = build_whitelist(config)?;
+		for ip in whitelist.iter() {
+			guard
+				.whitelist_add(*ip)
+				.with_context(|| format!("failed to load XDP whitelist entry {ip}"))?;
+		}
+		tracing::info!(
+			entries = whitelist.len(),
+			"configured whitelist loaded into the XDP LPM maps"
+		);
 	}
 	let xdp_metrics = XdpMetrics::register()?;
 
 	let sd = shutdown_rx.clone();
 	let shared_thread = shared.clone();
 	std::thread::spawn(move || {
+		// The loop ticks every 5 s; sweep the ban maps once a minute.
+		const REAP_EVERY_TICKS: u32 = 12;
+		let mut tick: u32 = 0;
 		while !*sd.borrow() {
 			let guard = match shared_thread.lock() {
 				Ok(g) => g,
@@ -96,6 +113,17 @@ pub(crate) fn start_xdp(
 			guard.drain_events();
 			if let Ok(stats) = guard.get_stats() {
 				xdp_metrics.update(&stats);
+			}
+			tick += 1;
+			if tick >= REAP_EVERY_TICKS {
+				tick = 0;
+				// The packet path only expires the exact /32 or /128 key it
+				// looked up, so wider prefix bans stay resident until swept.
+				match guard.reap_expired_bans() {
+					Ok(0) => {},
+					Ok(n) => tracing::info!(reaped = n, "expired XDP prefix bans removed"),
+					Err(e) => tracing::warn!(error = %e, "XDP expired-ban reaper failed"),
+				}
 			}
 			drop(guard);
 			std::thread::sleep(Duration::from_secs(5));
@@ -108,7 +136,7 @@ pub(crate) fn start_xdp(
 }
 
 #[cfg(not(feature = "xdp"))]
-pub(crate) fn start_xdp(
+pub fn start_xdp(
 	_config: &Arc<Config>,
 	_shutdown_rx: &watch::Receiver<bool>,
 	_blacklist: &Arc<Blacklist>,
@@ -153,7 +181,7 @@ fn ensure_store_features(config: &Config) -> anyhow::Result<()> {
 /// # Errors
 /// Fails on an invalid entry or when the config requires store features that are
 /// not compiled in.
-pub(crate) fn build_whitelist(config: &Config) -> anyhow::Result<Arc<HashSet<IpAddr>>> {
+pub fn build_whitelist(config: &Config) -> anyhow::Result<Arc<HashSet<IpAddr>>> {
 	ensure_store_features(config)?;
 	let mut set = HashSet::with_capacity(config.whitelist.len());
 	for entry in &config.whitelist {
@@ -163,52 +191,4 @@ pub(crate) fn build_whitelist(config: &Config) -> anyhow::Result<Arc<HashSet<IpA
 		set.insert(ip);
 	}
 	Ok(Arc::new(set))
-}
-
-#[cfg(test)]
-mod tests {
-	use super::*;
-
-	fn config_with_redis() -> Config {
-		Config {
-			store: crate::config::StoreConfig {
-				redis_url: Some("redis://127.0.0.1:6379/0".to_string()),
-				..Default::default()
-			},
-			..Default::default()
-		}
-	}
-
-	#[cfg(not(feature = "store-redis"))]
-	#[test]
-	fn redis_config_without_feature_fails_fast() {
-		let err = ensure_store_features(&config_with_redis()).expect_err("must fail without store-redis");
-		assert!(err.to_string().contains("built without store-redis feature"));
-	}
-
-	#[cfg(not(feature = "store-redis"))]
-	#[test]
-	fn empty_store_config_passes_without_feature() {
-		assert!(ensure_store_features(&Config::default()).is_ok());
-	}
-
-	#[cfg(feature = "store-redis")]
-	#[test]
-	fn guard_is_noop_with_feature() {
-		assert!(ensure_store_features(&config_with_redis()).is_ok());
-	}
-
-	/// XDP auto-ban wiring: `start_xdp` must accept the `Arc<Blacklist>` and, with
-	/// `[xdp]` disabled, touch neither the kernel nor the blacklist. The
-	/// `set_autoban` -> `load()` order inside the enabled branch cannot be checked
-	/// without a kernel.
-	#[test]
-	fn start_xdp_accepts_blacklist_and_skips_kernel_when_disabled() {
-		let (_tx, rx) = watch::channel(false);
-		let blacklist = Arc::new(Blacklist::new());
-		let started = start_xdp(&Arc::new(Config::default()), &rx, &blacklist)
-			.expect("xdp disabled: no kernel work and no error");
-		assert!(started.is_none());
-		assert!(blacklist.is_empty());
-	}
 }

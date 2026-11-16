@@ -45,8 +45,18 @@ sudo bash scripts/xdp_ipv6_smoke.sh
 ```
 
 Поднимает netns + veth, грузит программу через verifier и проверяет: бан IPv6 и IPv4
-(включая короткие UDP-датаграммы), снятие бана, истечение TTL по монотонным часам и
-`udp_policy = "rate-limit"` для IPv6 (политика патчится в `.rodata` до загрузки).
+(включая короткие UDP-датаграммы), снятие бана, whitelist поверх активного бана, истечение
+TTL по монотонным часам и `udp_policy = "rate-limit"` для IPv6 (политика патчится в
+`.rodata` до загрузки).
+
+```bash
+sudo bash scripts/xdp_pkt_test.sh
+```
+
+Проверяет то, что veth-смок поймать не может по построению: Ethernet-паддинг (длина
+TCP-payload по `ip->tot_len`), VLAN/QinQ-теги и фрагменты — забаненный источник не должен
+проходить ни тегированным, ни фрагментированным.
+
 `scripts/xdp_netns_smoke.sh` дополнительно гоняет реальный бинарь `rampart` end-to-end
 (требует `hping3`).
 

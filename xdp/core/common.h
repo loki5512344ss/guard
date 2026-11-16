@@ -7,10 +7,24 @@
 
 #define ETH_P_IP  0x0800
 #define ETH_P_IPV6 0x86DD
+#define ETH_P_8021Q  0x8100
+#define ETH_P_8021AD 0x88A8
 #define IPPROTO_TCP 6
 #define IPPROTO_UDP 17
+#define IPPROTO_FRAGMENT 44
 #define IP_OFFSET 0x1FFF
 #define IP_MF 0x2000
+
+/**
+ * One 802.1Q / 802.1ad tag.
+ *
+ * The filter only needs the encapsulated EtherType to skip up to two tags
+ * before L3; the TCI (PCP/DEI/VID) has no bearing on L3/L4 policy.
+ */
+struct rampart_vlan_hdr {
+    __u16 tci;          // PCP/DEI/VID, unused
+    __u16 encap_proto;  // EtherType of the next header
+};
 
 /**
  * Protocol-agnostic TCP connection states.

@@ -9,7 +9,8 @@
 #      to fall through to XDP_PASS past the blacklist because the length check
 #      was sized for TCP;
 #   4. the same holds for IPv4, through the shared L4 gate;
-#   5. expiry: a ban with a monotonic TTL really expires in the kernel; it
+#   5. a /128 entry in whitelist6_map bypasses an active ban;
+#   6. expiry: a ban with a monotonic TTL really expires in the kernel; it
 #      used to live forever because userspace wrote epoch-ns while the C side
 #      compared against bpf_ktime_get_ns().
 #
@@ -74,19 +75,21 @@ discover_maps() {
 	IDS=$(bpftool prog show pinned "$PIN" | grep -o 'map_ids [0-9,]*' | cut -d' ' -f2 | tr ',' ' ')
 	B4=""
 	B6=""
+	W6=""
 	ST=""
 	for id in $IDS; do
 		desc=$(bpftool map show id "$id" 2>/dev/null)
 		case "$desc" in
 			*"name blacklist6_map"*) B6=$id ;;
 			*"name blacklist_map"*) B4=$id ;;
+			*"name whitelist6_map"*) W6=$id ;;
 			*"name stats_map"*) ST=$id ;;
 		esac
 	done
-	[ -n "$B4" ] && [ -n "$B6" ] && [ -n "$ST" ]
+	[ -n "$B4" ] && [ -n "$B6" ] && [ -n "$W6" ] && [ -n "$ST" ]
 }
 discover_maps || { echo "карты не найдены"; exit 1; }
-ok "blacklist_map id=$B4, blacklist6_map id=$B6, stats_map id=$ST"
+ok "blacklist_map id=$B4, blacklist6_map id=$B6, whitelist6_map id=$W6, stats_map id=$ST"
 
 # LPM keys: prefixlen (u32 LE) followed by the address in network order.
 KEY6="80 00 00 00 fd 00 00 00 00 00 00 00 00 00 00 00 00 00 00 02"
@@ -114,7 +117,8 @@ stats() {
 	bpftool -j map dump id "$ST" | python3 -c "
 import json, sys
 names = {0: 'total', 1: 'tcp', 2: 'whitelist', 3: 'blacklist', 4: 'syn_thr',
-         5: 'pass', 6: 'drop', 7: 'udp', 8: 'rate', 9: 'chal_sent'}
+         5: 'pass', 6: 'drop', 7: 'udp', 8: 'rate', 9: 'chal_sent',
+         12: 'frag_bypass'}
 out = {}
 for e in json.load(sys.stdin):
     k = names.get(e['formatted']['key'])
@@ -174,6 +178,23 @@ drop1=$(metric drop)
 	&& ok "v4 короткие датаграммы дропаются баном (drop $drop0 -> $drop1)" \
 	|| fail "v4 короткая датаграмма прошла мимо бана ($(stats))"
 bpftool map delete id "$B4" key hex $KEY4 || fail "v4 map delete"
+
+# Phase 2b: the IPv6 whitelist wins over an active ban and is consulted before
+# the port gate and conntrack, so an allowlisted source truly bypasses
+# filtering.
+WL6_KEY="80 00 00 00 fd 00 00 00 00 00 00 00 00 00 00 00 00 00 00 02"
+bpftool map update id "$B6" key hex $KEY6 value hex ff ff ff ff ff ff ff ff || fail "v6 ban for whitelist phase"
+bpftool map update id "$W6" key hex $WL6_KEY value hex 01 || fail "whitelist6 map update"
+drop0=$(metric drop); total0=$(metric total); wl0=$(metric whitelist)
+for _ in 1 2 3; do send6 100; done
+sleep 0.5
+drop1=$(metric drop); total1=$(metric total); wl1=$(metric whitelist)
+[ "${total1:-0}" -gt "${total0:-0}" ] && [ "${drop1:-0}" -eq "${drop0:-0}" ] \
+	&& [ "${wl1:-0}" -gt "${wl0:-0}" ] \
+	&& ok "v6 whitelist обходит активный бан (total $total0 -> $total1, drop $drop0 -> $drop1, whitelist $wl0 -> $wl1)" \
+	|| fail "v6 whitelist не обходит бан ($(stats))"
+bpftool map delete id "$W6" key hex $WL6_KEY || fail "whitelist6 map delete"
+bpftool map delete id "$B6" key hex $KEY6 || fail "v6 map delete after whitelist phase"
 
 # Phase 3: ban expiry on the monotonic clock. A TTL written in epoch-ns would
 # never expire against bpf_ktime_get_ns(), so this phase pins the clock choice.

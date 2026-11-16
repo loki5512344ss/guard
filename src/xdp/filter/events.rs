@@ -1,11 +1,19 @@
 //! Parsing and policy for XDP ringbuf events (`struct xdp_event`).
 //!
-//! Pure functions (no I/O, no libbpf) so that they can be covered by unit tests without
-//! a kernel or Redis. The callback wiring lives in [`super::attach`].
+//! Parsing and the auto-ban policy are pure functions covered by
+//! `tests/xdp_events.rs`; [`build_ringbuf`] wires the same policy into the libbpf
+//! ringbuf callback.
 
-use std::net::Ipv4Addr;
+use std::net::{IpAddr, Ipv4Addr};
+use std::sync::Arc;
+use std::time::Duration;
+
+use anyhow::{Context, Result};
+use libbpf_rs::{MapCore, Object, RingBuffer, RingBufferBuilder};
 
 use crate::config::XdpConfig;
+use crate::filter::blacklist::Blacklist;
+use crate::xdp::metrics::XDP_AUTOBANS_TOTAL;
 
 /// Exact size of `struct xdp_event` (see `xdp/core/common.h:61-66`):
 /// `__u32 type` @0, `__u32 src_ip` @4, `__u32 metadata` @8,
@@ -164,6 +172,65 @@ pub fn auto_ban_decision(event: &XdpEvent, config: &AutoBanConfig) -> Option<Ban
 		}),
 		XdpEventKind::ConnDrop => None,
 	}
+}
+
+/// Builds the ringbuf callback for `events_ringbuf`.
+///
+/// The callback must be `'static`, so all shared state (`Arc<Blacklist>`, a copy of
+/// `AutoBanConfig`) is captured by `move` clones. When `blacklist` is `None` (feature not
+/// wired) or the policy is disabled, events are only parsed and logged in a structured
+/// way; no bans are written. The hot path does no `format!` — only `tracing` fields and
+/// `&'static str` reasons.
+pub(super) fn build_ringbuf(
+	obj: &Object,
+	blacklist: Option<Arc<Blacklist>>,
+	cfg: AutoBanConfig,
+) -> Result<RingBuffer<'static>> {
+	let map = obj
+		.maps()
+		.find(|m| m.name() == "events_ringbuf")
+		.context("events_ringbuf not found")?;
+	let mut builder = RingBufferBuilder::new();
+	builder.add(&map, move |data: &[u8]| {
+		let Some(event) = parse_xdp_event(data) else {
+			tracing::debug!(
+				len = data.len(),
+				"xdp ringbuf frame ignored (too short or unknown type)"
+			);
+			return 0;
+		};
+		tracing::debug!(
+			kind = ?event.kind,
+			src_ip = %event.src_ip,
+			metadata = event.metadata,
+			"xdp event"
+		);
+		let Some(blacklist) = &blacklist else {
+			return 0;
+		};
+		if let Some(ban) = auto_ban_decision(&event, &cfg) {
+			let addr = IpAddr::V4(ban.ip);
+			// `Blacklist::add` returns `()` (it ignores `DashMap::insert`) and blacklist.rs is
+			// out of our edit scope, so "is this a new ban" is decided through the public
+			// `is_blocked` before the overwrite. This dedups the log line and the metric by
+			// active ban, not by the fact of insertion.
+			let already_banned = blacklist.is_blocked(addr);
+			blacklist.add(addr, Duration::from_secs(ban.duration_secs), ban.reason);
+			if already_banned {
+				tracing::debug!(src_ip = %ban.ip, reason = ban.reason, "xdp auto-ban refreshed");
+			} else {
+				XDP_AUTOBANS_TOTAL.inc();
+				tracing::info!(
+					src_ip = %ban.ip,
+					reason = ban.reason,
+					duration_secs = ban.duration_secs,
+					"xdp auto-ban issued"
+				);
+			}
+		}
+		0
+	})?;
+	Ok(builder.build()?)
 }
 
 // Parser and policy coverage lives in `tests/xdp_events.rs` (this module is kept under

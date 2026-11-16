@@ -23,6 +23,12 @@ impl XdpFilter {
 		Ok(())
 	}
 
+	/// Nothing to reap without the kernel filter; the maintenance loop can call
+	/// this unconditionally.
+	pub fn reap_expired_bans(&self) -> Result<usize> {
+		Ok(0)
+	}
+
 	/// Honest failure: reading `prefix_stats` is not wired up without the `xdp` feature.
 	///
 	/// # Errors

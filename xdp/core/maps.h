@@ -6,8 +6,9 @@
  *
  * An LPM trie so operators can ban a CIDR range rather than single hosts.
  * The value is the ban expiry as a bpf_ktime_get_ns() timestamp; expired
- * entries are removed lazily by the lookup helpers. BPF_F_NO_PREALLOC is
- * required by the LPM trie type.
+ * entries are ignored by the packet path and reaped from userspace, which
+ * knows the prefix length. BPF_F_NO_PREALLOC is required by the LPM trie
+ * type.
  */
 struct {
     __uint(type, BPF_MAP_TYPE_LPM_TRIE);
@@ -34,8 +35,9 @@ struct {
 /**
  * Whitelist.
  *
- * LPM trie of trusted CIDRs; the filter consults it before any other check
- * so allowlisted traffic can never be throttled or banned away.
+ * LPM trie of trusted CIDRs; the filter consults it before the port gate,
+ * conntrack and blacklists so allowlisted traffic can never be throttled or
+ * banned away.
  */
 struct {
     __uint(type, BPF_MAP_TYPE_LPM_TRIE);
@@ -46,10 +48,27 @@ struct {
 } whitelist_map SEC(".maps");
 
 /**
+ * IPv6 whitelist.
+ *
+ * IPv6 twin of whitelist_map: a 20-byte LPM key (host-order prefixlen
+ * followed by 16 address bytes) and the same early position in the packet
+ * path. Lookups use prefixlen 128 for the exact source address.
+ */
+struct {
+    __uint(type, BPF_MAP_TYPE_LPM_TRIE);
+    __uint(max_entries, 1000);
+    __type(key, struct lpm_key6);
+    __type(value, __u8);
+    __uint(map_flags, BPF_F_NO_PREALLOC);
+} whitelist6_map SEC(".maps");
+
+/**
  * Connection tracking table (SYN_RECEIVED to ESTABLISHED).
  *
  * LRU so a flood of half-open flows evicts old entries instead of failing
- * map updates; RST/FIN removes entries explicitly on the normal path.
+ * map updates; RST/FIN removes entries explicitly on the normal path. Only
+ * new connections are policed: a non-SYN segment whose entry was evicted
+ * passes, because this is a stateless filter, not a firewall.
  */
 struct {
     __uint(type, BPF_MAP_TYPE_LRU_HASH);
@@ -155,6 +174,7 @@ struct {
 #define STAT_CHALLENGE_SENT     9
 #define STAT_CHALLENGE_VERIFIED 10
 #define STAT_CHALLENGE_FAILED   11
+#define STAT_FRAGMENT_BYPASS    12
 
 /**
  * Per-CPU counter storage.

@@ -8,7 +8,9 @@
  * Increment one per-CPU counter.
  *
  * A missing slot (never updated, or an index past max_entries) is ignored so
- * accounting can never change a packet verdict.
+ * accounting can never change a packet verdict. The slot is private to the
+ * current CPU, so a plain read-modify-write is enough: an atomic would only
+ * add contention on the hottest path.
  *
  * @param idx  STAT_* index into stats_map
  */
@@ -16,7 +18,7 @@ static __always_inline void inc_stat(__u32 idx)
 {
     __u64 *val = bpf_map_lookup_elem(&stats_map, &idx);
     if (val)
-        __sync_fetch_and_add(val, 1);
+        (*val)++;
 }
 
 /**
@@ -35,6 +37,7 @@ static __always_inline void inc_rate_limit(void)   { inc_stat(STAT_RATE_LIMIT); 
 static __always_inline void inc_chal_sent(void)     { inc_stat(STAT_CHALLENGE_SENT); }
 static __always_inline void inc_chal_verified(void) { inc_stat(STAT_CHALLENGE_VERIFIED); }
 static __always_inline void inc_chal_failed(void)   { inc_stat(STAT_CHALLENGE_FAILED); }
+static __always_inline void inc_fragment_bypass(void) { inc_stat(STAT_FRAGMENT_BYPASS); }
 static __always_inline void inc_pass(void)         { inc_stat(STAT_PASS); }
 static __always_inline void inc_drop(void)         { inc_stat(STAT_DROP); }
 

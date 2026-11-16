@@ -13,6 +13,10 @@ pub struct XdpMetrics {
 	dropped: IntGauge,
 	udp: IntGauge,
 	rate_limit: IntGauge,
+	challenge_sent: IntGauge,
+	challenge_verified: IntGauge,
+	challenge_failed: IntGauge,
+	fragment_bypass: IntGauge,
 }
 
 impl XdpMetrics {
@@ -33,6 +37,13 @@ impl XdpMetrics {
 			dropped: Self::new_gauge("rampart_xdp_dropped", "Packets dropped by filter")?,
 			udp: Self::new_gauge("rampart_xdp_udp", "UDP packets processed")?,
 			rate_limit: Self::new_gauge("rampart_xdp_rate_limit", "Packets rate-limited by window counter")?,
+			challenge_sent: Self::new_gauge("rampart_xdp_challenge_sent", "RST challenges sent")?,
+			challenge_verified: Self::new_gauge("rampart_xdp_challenge_verified", "RST challenges verified")?,
+			challenge_failed: Self::new_gauge("rampart_xdp_challenge_failed", "RST challenges failed")?,
+			fragment_bypass: Self::new_gauge(
+				"rampart_xdp_fragment_bypass",
+				"Packets bypassing L4 checks as fragments",
+			)?,
 		};
 		tracing::info!("XDP Prometheus metrics registered");
 		Ok(m)
@@ -48,6 +59,10 @@ impl XdpMetrics {
 		self.dropped.set(stats.dropped as i64);
 		self.udp.set(stats.udp as i64);
 		self.rate_limit.set(stats.rate_limit as i64);
+		self.challenge_sent.set(stats.challenge_sent as i64);
+		self.challenge_verified.set(stats.challenge_verified as i64);
+		self.challenge_failed.set(stats.challenge_failed as i64);
+		self.fragment_bypass.set(stats.fragment_bypass as i64);
 		tracing::debug!("XDP metrics updated");
 	}
 }

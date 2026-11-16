@@ -1,27 +1,25 @@
-use anyhow::{Context, Result, bail};
-use libbpf_rs::{MapCore, Object, OpenObject, RingBuffer, RingBufferBuilder};
 use std::ffi::CString;
-use std::net::IpAddr;
-use std::sync::Arc;
-use std::time::Duration;
+use std::os::unix::io::AsFd;
 
-use crate::filter::blacklist::Blacklist;
+use anyhow::{Context, Result, bail};
+use libbpf_rs::{Object, OpenObject, Program, Xdp, XdpFlags};
+
 use crate::xdp::globals::{RODATA_MAP_NAME, XdpGlobals};
-use crate::xdp::metrics::XDP_AUTOBANS_TOTAL;
 
-use super::events::{AutoBanConfig, auto_ban_decision, parse_xdp_event};
+/// Name of the XDP program inside the compiled object.
+const XDP_PROG_NAME: &str = "rampart_universal_filter";
 
 /// Builds the NUL-terminated C string libc's `if_nametoindex` requires.
 /// Rejects interface names containing an interior NUL byte instead of
 /// silently truncating at it (the `&str`-as-`*const c_char` UB we removed).
-pub(super) fn interface_cstr(name: &str) -> Result<CString> {
+pub fn interface_cstr(name: &str) -> Result<CString> {
 	CString::new(name).with_context(|| format!("interface name {name:?} contains an interior NUL byte"))
 }
 
 /// The internal `.rodata` data map is matched by suffix: libbpf names it
 /// `<obj_name>.rodata`, and with `open_memory` and no explicit `.name()` the object is
 /// called `memory` — an exact comparison broke on a live kernel (smoke test).
-pub(super) fn is_rodata_map(name: &str) -> bool {
+pub fn is_rodata_map(name: &str) -> bool {
 	name.ends_with(".rodata")
 }
 
@@ -57,108 +55,148 @@ pub(super) fn patch_rodata(open_obj: &mut OpenObject, globals: &XdpGlobals) -> R
 		.with_context(|| format!("failed to set initial value of '{RODATA_MAP_NAME}'"))
 }
 
+/// `XDP_ATTACHED_*` values from `linux/netlink.h` (`IFLA_XDP_ATTACHED`).
+///
+/// The order is NONE, DRV, SKB, HW, MULTI — hardware offload is 3, not 2.
+const XDP_ATTACHED_DRV: u8 = 1;
+const XDP_ATTACHED_SKB: u8 = 2;
+const XDP_ATTACHED_HW: u8 = 3;
+const XDP_ATTACHED_MULTI: u8 = 4;
+
 /// Honest name of the attach mode, derived from the `attach_mode` field of
-/// `bpf_xdp_query_opts` (kernel `enum xdp_attached_mode`: NONE=0, DRV=1, OFFLOAD=2, SKB=3).
-pub(super) fn xdp_attach_mode_name(mode: u8) -> &'static str {
+/// `bpf_xdp_query_opts` (kernel `enum xdp_attach_mode`).
+pub fn xdp_attach_mode_name(mode: u8) -> &'static str {
 	match mode {
-		1 => "native (drv)",
-		2 => "hardware offload",
-		3 => "generic (skb)",
+		XDP_ATTACHED_DRV => "native (drv)",
+		XDP_ATTACHED_SKB => "generic (skb)",
+		XDP_ATTACHED_HW => "hardware offload",
+		XDP_ATTACHED_MULTI => "multiple programs",
 		_ => "none",
 	}
 }
 
-/// Builds the ringbuf callback for `events_ringbuf`.
+/// Detach flags matching the mode the kernel actually attached the program in.
 ///
-/// The callback must be `'static`, so all shared state (`Arc<Blacklist>`, a copy of
-/// `AutoBanConfig`) is captured by `move` clones. When `blacklist` is `None` (feature not
-/// wired) or the policy is disabled, events are only parsed and logged in a structured
-/// way; no bans are written. The hot path does no `format!` — only `tracing` fields and
-/// `&'static str` reasons.
-pub(super) fn build_ringbuf(
-	obj: &Object,
-	blacklist: Option<Arc<Blacklist>>,
-	cfg: AutoBanConfig,
-) -> Result<RingBuffer<'static>> {
-	let map = obj
-		.maps()
-		.find(|m| m.name() == "events_ringbuf")
-		.context("events_ringbuf not found")?;
-	let mut builder = RingBufferBuilder::new();
-	builder.add(&map, move |data: &[u8]| {
-		let Some(event) = parse_xdp_event(data) else {
-			tracing::debug!(
-				len = data.len(),
-				"xdp ringbuf frame ignored (too short or unknown type)"
-			);
-			return 0;
-		};
-		tracing::debug!(
-			kind = ?event.kind,
-			src_ip = %event.src_ip,
-			metadata = event.metadata,
-			"xdp event"
-		);
-		let Some(blacklist) = &blacklist else {
-			return 0;
-		};
-		if let Some(ban) = auto_ban_decision(&event, &cfg) {
-			let addr = IpAddr::V4(ban.ip);
-			// `Blacklist::add` returns `()` (it ignores `DashMap::insert`) and blacklist.rs is
-			// out of our edit scope, so "is this a new ban" is decided through the public
-			// `is_blocked` before the overwrite. This dedups the log line and the metric by
-			// active ban, not by the fact of insertion.
-			let already_banned = blacklist.is_blocked(addr);
-			blacklist.add(addr, Duration::from_secs(ban.duration_secs), ban.reason);
-			if already_banned {
-				tracing::debug!(src_ip = %ban.ip, reason = ban.reason, "xdp auto-ban refreshed");
-			} else {
-				XDP_AUTOBANS_TOTAL.inc();
-				tracing::info!(
-					src_ip = %ban.ip,
-					reason = ban.reason,
-					duration_secs = ban.duration_secs,
-					"xdp auto-ban issued"
-				);
-			}
-		}
-		0
-	})?;
-	Ok(builder.build()?)
+/// The mode is discovered after attach via `bpf_xdp_query`; using the flags
+/// that were *requested* is wrong when the kernel picked a different mode
+/// (for example generic after a failed native attach).
+fn detach_flags_for_mode(mode: u8) -> Option<XdpFlags> {
+	match mode {
+		XDP_ATTACHED_DRV => Some(XdpFlags::DRV_MODE),
+		XDP_ATTACHED_SKB => Some(XdpFlags::SKB_MODE),
+		XDP_ATTACHED_HW => Some(XdpFlags::HW_MODE),
+		XDP_ATTACHED_MULTI => None,
+		// NONE: the query failed after a successful attach.
+		_ => None,
+	}
 }
 
-#[cfg(test)]
-mod tests {
-	use super::*;
+/// Attaches with the native-first mode ladder and returns the detach flags.
+fn attach_with_fallback(xdp: &Xdp<'_>, ifindex: i32, interface: &str) -> Result<XdpFlags> {
+	if let Err(e) = xdp.attach(ifindex, XdpFlags::NONE) {
+		tracing::warn!(
+			interface = %interface,
+			error = %e,
+			"native XDP attach failed, falling back to generic (skb) mode"
+		);
+		xdp.attach(ifindex, XdpFlags::SKB_MODE)
+			.context("XDP attach failed in both native and generic modes")?;
+		Ok(XdpFlags::SKB_MODE)
+	} else {
+		Ok(XdpFlags::NONE)
+	}
+}
 
-	#[test]
-	fn interface_cstr_accepts_plain_names() {
-		let c = interface_cstr("eth0").expect("valid interface name");
-		assert_eq!(c.as_bytes(), b"eth0");
-		assert_eq!(c.as_bytes_with_nul(), b"eth0\0");
+/// Finds the loader's XDP program in a loaded object.
+fn find_xdp_program<'obj>(obj: &'obj Object) -> Result<Program<'obj>> {
+	obj.progs()
+		.find(|p| p.name() == XDP_PROG_NAME)
+		.with_context(|| format!("XDP program '{XDP_PROG_NAME}' not found"))
+}
+
+/// Detaches the program if it is dropped while still armed.
+///
+/// Any error between a successful attach and the moment `XdpFilter` takes
+/// ownership leaves an XDP program attached that drops traffic but has no
+/// userspace reader (an orphaned filter). This guard makes that window fail
+/// safe: unless [`DetachGuard::disarm`] was called, dropping it detaches.
+pub(super) struct DetachGuard<'obj> {
+	prog: Program<'obj>,
+	ifindex: i32,
+	/// Raw `XdpFlags` bits: `XdpFlags` itself is neither `Copy` nor `Clone`.
+	flags_bits: u32,
+	armed: bool,
+}
+
+impl<'obj> DetachGuard<'obj> {
+	fn new(prog: Program<'obj>, ifindex: i32, flags_bits: u32) -> Self {
+		Self {
+			prog,
+			ifindex,
+			flags_bits,
+			armed: true,
+		}
 	}
 
-	#[test]
-	fn interface_cstr_rejects_interior_nul() {
-		assert!(interface_cstr("et\0h0").is_err());
+	/// Marks the attach as committed; dropping the guard is then a no-op.
+	pub(super) fn disarm(mut self) {
+		self.armed = false;
 	}
+}
 
-	#[test]
-	fn rodata_map_matches_libbpf_naming() {
-		// libbpf builds the name as `<obj><section>` without rewriting the dot
-		// (libbpf.c ~1911); with open_memory and no name the object is called "memory":
-		assert!(is_rodata_map("rampart.rodata"));
-		assert!(is_rodata_map("memory.rodata"));
-		assert!(is_rodata_map(".rodata"));
-		assert!(!is_rodata_map("rampart.bss"));
-		assert!(!is_rodata_map("stats_map"));
+impl Drop for DetachGuard<'_> {
+	fn drop(&mut self) {
+		if !self.armed {
+			return;
+		}
+		if let Err(e) = Xdp::new(self.prog.as_fd()).detach(self.ifindex, XdpFlags::from_bits_truncate(self.flags_bits))
+		{
+			tracing::error!(
+				ifindex = self.ifindex,
+				error = %e,
+				"XDP attach rollback failed: the program may still be attached"
+			);
+		} else {
+			tracing::warn!(ifindex = self.ifindex, "XDP attach rolled back after a setup failure");
+		}
 	}
+}
 
-	#[test]
-	fn attach_mode_names_are_honest() {
-		assert_eq!(xdp_attach_mode_name(1), "native (drv)");
-		assert_eq!(xdp_attach_mode_name(3), "generic (skb)");
-		assert_eq!(xdp_attach_mode_name(2), "hardware offload");
-		assert_eq!(xdp_attach_mode_name(0), "none");
-	}
+/// Attaches the program and returns `(detach flags, mode name, rollback guard)`.
+///
+/// The returned guard must be disarmed only after every fallible step that
+/// follows the attach has succeeded. The attach mode is queried from the
+/// kernel (not assumed from the requested flags) so that a generic-mode
+/// fallback is detached from the generic slot.
+pub(super) fn attach_program<'obj>(
+	obj: &'obj Object,
+	ifindex: i32,
+	interface: &str,
+) -> Result<(u32, &'static str, DetachGuard<'obj>)> {
+	let prog = find_xdp_program(obj)?;
+	let requested = {
+		let xdp = Xdp::new(prog.as_fd());
+		attach_with_fallback(&xdp, ifindex, interface)?
+	};
+	let mode = match Xdp::new(prog.as_fd()).query(ifindex, XdpFlags::NONE) {
+		Ok(query) => query.attach_mode,
+		Err(e) => {
+			tracing::warn!(
+				interface = %interface,
+				error = %e,
+				"XDP attach-mode query failed; assuming the requested flags"
+			);
+			0
+		},
+	};
+	// Fall back to the requested flags when the query failed or the interface
+	// reports several programs (MULTI): that is the best detach handle we have.
+	let flags_bits = detach_flags_for_mode(mode).unwrap_or(requested).bits();
+	let guard = DetachGuard::new(prog, ifindex, flags_bits);
+	let name = if mode == 0 {
+		"unknown"
+	} else {
+		xdp_attach_mode_name(mode)
+	};
+	Ok((flags_bits, name, guard))
 }

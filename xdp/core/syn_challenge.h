@@ -129,7 +129,10 @@ static __always_inline void chal_build_synack(struct xdp_md *ctx,
     __builtin_memcpy(tcpw, tcp, 20);
 
     if (is_ipv6) {
-        __builtin_memcpy(saddr, &((struct ipv6hdr *)l3)->daddr, 16); // swapped
+        // saddr/daddr hold the addresses of the reply: the new source is the
+        // original destination and the new destination is the original
+        // source. The checksum below is computed over exactly these values.
+        __builtin_memcpy(saddr, &((struct ipv6hdr *)l3)->daddr, 16);
         __builtin_memcpy(daddr, &((struct ipv6hdr *)l3)->saddr, 16);
     } else {
         saddr[0] = ((struct iphdr *)l3)->daddr;
@@ -191,8 +194,11 @@ static __always_inline void chal_build_synack(struct xdp_md *ctx,
     __builtin_memcpy(eth->h_source, md, ETH_ALEN);
     if (is_ipv6) {
         struct ipv6hdr *ip6 = l3;
-        __builtin_memcpy(&ip6->saddr, daddr, 16);
-        __builtin_memcpy(&ip6->daddr, saddr, 16);
+        // Write the header with the same orientation the checksum was built
+        // from: saddr is the new source (original destination), daddr the
+        // new destination (original source).
+        __builtin_memcpy(&ip6->saddr, saddr, 16);
+        __builtin_memcpy(&ip6->daddr, daddr, 16);
         ip6->hop_limit = 64;
     } else {
         __builtin_memcpy(l3, ipw, 20);
@@ -283,10 +289,13 @@ static __always_inline int chal_on_rst(struct tcphdr *tcp,
     __u32 ack = bpf_ntohl(tcp->ack_seq);
     __u8 ok = (seq == p->bad_ack) ||
               (tcp->ack && ack == p->marker + 1);
+    __u64 sent_at = p->sent_at;
 
+    // Copy every field needed before deleting: an LRU element may be freed
+    // as soon as it is removed, so p must never be dereferenced afterwards.
     bpf_map_delete_elem(&challenge_pending, flow);
 
-    if (!ok || now - p->sent_at > timeout_ns) {
+    if (!ok || now - sent_at > timeout_ns) {
         inc_chal_failed();
         return XDP_DROP;
     }

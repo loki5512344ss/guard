@@ -28,7 +28,8 @@
  *
  *   struct cursor   bounds-checked window over the TCP payload, where pos is
  *                   the first payload byte and end is one past the last byte
- *                   of the packet (validated against data_end).
+ *                   of the payload as declared by the IP header, capped by
+ *                   data_end (Ethernet padding is never part of the window).
  *   struct pkt_meta read-only metadata: the 4-tuple (ports in host byte
  *                   order), payload length, the full TCP flags byte and the
  *                   L3 family.
@@ -98,7 +99,7 @@
  */
 struct cursor {
     __u8 *pos; // next unparsed byte
-    __u8 *end; // one past last valid byte (== data_end)
+    __u8 *end; // one past the last payload byte (IP length capped by data_end)
 };
 
 /**

@@ -6,7 +6,9 @@
 
 mod probe;
 pub use probe::{
-	AttachMode, EnvironmentReport, FilesystemProbe, KernelVersion, MIN_KERNEL, SystemProbe, XdpStats,
+	AttachMode, EnvironmentReport, FilesystemProbe, KernelVersion, MIN_KERNEL, STAT_BLACKLIST, STAT_CHALLENGE_FAILED,
+	STAT_CHALLENGE_SENT, STAT_CHALLENGE_VERIFIED, STAT_DROP, STAT_FRAGMENT_BYPASS, STAT_PASS, STAT_RATE_LIMIT,
+	STAT_SYN_THROTTLE, STAT_TCP, STAT_TOTAL, STAT_UDP, STAT_WHITELIST, SystemProbe, XdpStats,
 	driver_supports_native_xdp,
 };
 
@@ -21,18 +23,17 @@ mod metrics;
 #[cfg(feature = "xdp")]
 mod filter;
 #[cfg(feature = "xdp")]
-pub use filter::XdpFilter;
-#[cfg(feature = "xdp")]
-pub use filter::blacklist6_key;
-#[cfg(feature = "xdp")]
 pub use filter::events::{
 	AutoBanConfig, BanAction, XDP_EVENT_LEN, XdpEvent, XdpEventKind, auto_ban_decision, parse_xdp_event,
 };
 #[cfg(feature = "xdp")]
-pub use filter::monotonic_ns;
+pub use filter::{
+	XdpFilter, blacklist_key, blacklist6_key, interface_cstr, is_rodata_map, normalize_cidr, whitelist_key,
+	whitelist6_key, xdp_attach_mode_name,
+};
 
 #[cfg(feature = "xdp")]
-pub use probe::XdpMetrics;
+pub use probe::{XdpMetrics, blacklist_expiry_ns, monotonic_ns};
 
 #[cfg(not(feature = "xdp"))]
 mod noop;
