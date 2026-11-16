@@ -8,7 +8,7 @@
 //! The bytes already consumed for the head are forwarded to the upstream as the
 //! initial tunnel payload, so the request is not lost.
 
-mod parser;
+pub mod parser;
 
 use crate::config::HttpProtocolConfig;
 use crate::protocol::{HandshakeResult, ProtocolHandler, Upstream};
@@ -93,26 +93,5 @@ impl ProtocolHandler for HttpProtocolHandler {
 				parser::Verdict::Reject { reason } => Err(anyhow::anyhow!("http: {reason}")),
 			}
 		})
-	}
-}
-
-#[cfg(test)]
-mod tests {
-	use super::*;
-
-	#[tokio::test]
-	async fn zero_limit_fails_fast_without_io() {
-		let config = HttpProtocolConfig::default();
-		let mut broken = config.clone();
-		broken.max_header_bytes = 0;
-		let handler = HttpProtocolHandler::new(&broken, &[]);
-		let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
-		let client = tokio::net::TcpStream::connect(listener.local_addr().expect("addr"))
-			.await
-			.expect("connect");
-		let (mut server, _) = listener.accept().await.expect("accept");
-		drop(listener);
-		assert!(handler.read_head(&mut server).await.is_err());
-		drop(client);
 	}
 }

@@ -258,6 +258,9 @@ module-size, secrets, `cargo deny`, rustdoc без warning'ов, clang+verifier,
   исправленный v6 SYN-ACK, `inc_drop()` на всех DROP-путях, per-CPU инкремент без atomic.
 - XDP: VLAN/QinQ до L3, фрагменты проверяются по blacklist, неизвестный non-SYN поток → PASS
   («stateless-фильтр, не firewall»), `whitelist6_map`, whitelist до state machine.
+- XDP spoof-gate: в `prefix_stats` добавлен 64-битный bitmap хешей source-адресов, userspace
+  считает popcount и сбрасывает счётчики при чтении → `Block` работает и на XDP-пути, а окно
+  детектора стало честным (раньше счётчики были кумулятивными и со временем «банили» всё).
 - XDP: протухшие префиксные баны удаляются userspace-reaper'ом раз в 60 с (пакетный путь
   больше не пытается удалить `/24` ключом `/32`).
 - Загрузчик: запоминается фактический attach-флаг (native/skb) и проверяется detach;
@@ -284,22 +287,27 @@ module-size, secrets, `cargo deny`, rustdoc без warning'ов, clang+verifier,
 
 ### Осталось (следующий раунд)
 
-- [ ] API manager'а: `KEYS` → `SCAN`, batch `MGET` вместо N+1, ошибки Redis → 503 (а не
-      `200 []`), `DefaultBodyLimit`/`TimeoutLayer`, лимит длины `reason`, graceful shutdown,
-      эвикция login-лимитера, ключ по `X-Forwarded-For` за доверенным прокси.
+- [x] API manager'а: `SCAN`+`MGET` вместо `KEYS`/N+1, 503 вместо `200 []`, пагинация
+      `limit`/`offset` (100 по умолчанию, 1000 максимум), GET без записи (бэкфилл метаданных
+      вынесен в стартовую задачу), `DefaultBodyLimit` 8 КиБ, `TimeoutLayer` 10 с, rate-limit
+      на все мутирующие ручки, graceful shutdown с SIGTERM и join heartbeat, эвикция
+      login-лимитера, `MANAGER_TRUSTED_PROXIES` для `X-Forwarded-For`. Тесты —
+      `tests/manager_api.rs` (9) и `tests/manager_security.rs` (23).
 - [ ] `trusted_cidrs` + PROXY-header IP как ключ всех политик: банить/лимитировать по
       transport-IP, header-IP — только после валидации (ban-amplification через LB).
-- [ ] XDP spoof-gate: `unique_sources = 0` на XDP-пути делает `Block` недостижимым —
-      либо counting в ядре, либо явная документация (сейчас логируется).
+
 - [ ] IPv6 bind в listener (`Domain::IPV4` + строковый парсинг адреса).
 - [ ] `relay_idle_timeout_secs` в `[limits]` (сейчас константа 300 с) и семафор бюджета
       полем `Gateway` вместо `OnceLock`.
-- [ ] Оставшиеся инлайн-тесты (10 файлов) мигрировать в `tests/`.
+- [x] Инлайн-тесты мигрированы: `grep -rn "#\[cfg(test)\]" src/` пуст, 41 тест переехал в
+      10 новых сюит (`manager_auth`, `manager_heartbeat`, `protocol_http_*`, `traffic_*`,
+      `tui_prometheus`); счётчик тестов не изменился.
 
 ## 3. Backlog
 
-- [ ] Мигрировать существующие инлайн-тесты (`#[cfg(test)]` в src/) в `tests/` —
+- [x] Мигрировать существующие инлайн-тесты (`#[cfg(test)]` в src/) в `tests/` —
       правило §0.7; при миграции хелперы, нужные тестам, получают `pub` с потребителем.
+      Сделано 2026-11-16: в `src/` не осталось ни одного `#[cfg(test)]`.
 - [ ] protocol-gRPC plugin (после http)
 - [ ] BPF hook #1 реальный: HTTP поверх XDP (rate-limit до userspace)
 - [ ] GeoIP/ASN reputation (enum есть, реализации нет)

@@ -58,6 +58,31 @@ clickhouse-client --query "SELECT count() FROM rampart.events WHERE event_type='
 > Честно: hot-reload конфига не реализован — изменения применяются рестартом.
 > ASN/CIDR-баны, GeoIP-блокировки стран и выбор типов challenge через CLI не
 > реализованы; blacklist принимает цели в том виде, в котором их хранит Manager.
+
+---
+
+## 2. Сигналы деградации — что смотреть
+
+| Метрика / лог | Что значит | Что делать |
+|---------------|-----------|------------|
+| `rampart_connections_total{result="overloaded"}` | исчерпан глобальный бюджет соединений (4×workers×max_connections_per_ip) | проверить, не атака ли; при легитимной нагрузке — поднять `max_connections_per_ip`/`workers.count` |
+| `rampart_xdp_dropped_total` растёт, `passed_total` — нет | XDP дропает всё | проверить `protected_port_start/end`, баны и `xdp_feature_*`; смотреть `stats_map` через `bpftool` |
+| `rampart_clickhouse_dropped_total` > 0 | события не успевают уходить в ClickHouse | проверить доступность/латентность ClickHouse; события потеряны, защита работает |
+| `rampart_xdp_whitelist_total` растёт | трафик от whitelist-адресов | норма, но если это неожиданно — проверить `whitelist` в конфиге |
+| лог `global connection budget exhausted` | то же, что `overloaded` | см. выше |
+| лог `accept error ... backing off` | кончились fd (`EMFILE`) или память под сокеты | поднять `ulimit -n`, проверить утечки соединений |
+| лог `XDP filter attached ... (mode: generic (skb))` | драйвер не умеет native XDP | ожидаемо для virtio/veth; generic дороже по CPU |
+| лог `XDP .rodata map expects N bytes` | рассинхрон `config.h` и `XdpGlobals` | это баг сборки: не запускать, сообщить с числами из лога |
+
+Проверить, что XDP действительно снят после остановки демона:
+
+```bash
+bpftool net show dev eth0        # не должно быть xdp-программы
+ip link show eth0 | grep xdp     # пусто
+```
+
+Если программа осталась — это регрессия загрузчика, а не норма: снимать вручную
+`ip link set dev eth0 xdp off` и заводить баг.
 > Команды `emergency`, `drain` и `config set` пока не реализованы и завершатся
 > явной ошибкой вместо изменения состояния.
 

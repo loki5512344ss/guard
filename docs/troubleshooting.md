@@ -19,6 +19,31 @@ clang -O2 -g -target bpf -c xdp/core/universal_filter.c -o /tmp/uf.o
 # Не помогло — отключи XDP в config.toml ([xdp] enabled = false) и рестарт.
 ```
 
+### "accept error: ... backing off" / "Too many open files"
+
+```bash
+# Кончились дескрипторы: демон сам делает backoff, но сервис уже деградирует
+ulimit -n                       # для процесса
+systemctl show rampart -p LimitNOFILE
+journalctl -u rampart | grep -E "accept error|EMFILE|backing off"
+ss -s | head -5
+```
+
+Поднять `LimitNOFILE` (например, 65535), перезапустить, проверить утечки
+соединений (`ss -tan state established | wc -l`). Backoff в списке логов — это
+симптом, а не причина.
+
+### "XDP не снимается после остановки демона"
+
+```bash
+bpftool net show dev eth0
+ip link show eth0 | grep -i xdp
+```
+
+Если программа осталась — загрузчик не снял её (регрессия), снять вручную
+`ip link set dev eth0 xdp off` и завести баг с режимом attach из лога
+(`native (drv)` / `generic (skb)`).
+
 ### "Rate limit блокирует реальных клиентов"
 
 ```bash
@@ -31,7 +56,6 @@ curl -s http://EDGE_IP:9090/metrics | grep rate_limit
 ```
 
 ### "Высокое CPU на edge ноде"
-
 ```bash
 top -p $(pgrep rampart)
 perf top -p $(pgrep rampart)
@@ -61,6 +85,16 @@ export JWT_SECRET="$(openssl rand -hex 32)"   # минимум 32 байта
 export API_PASSWORD="сильный_пароль"          # 'changeme' запрещён
 export REDIS_URL="redis://127.0.0.1:6379/0"   # опционально
 rampart-manager
+```
+
+### "Manager не стартует: API_PASSWORD must be ..."
+
+`API_PASSWORD` должен быть непустым и не короче 16 символов, `JWT_SECRET` —
+не короче 32 непробельных байт. Пустой пароль раньше принимался как валидный,
+поэтому теперь это ошибка старта, а не тихий вход без пароля.
+
+```bash
+systemctl show rampart-manager -p Environment | tr ' ' '\n' | grep -E "API_PASSWORD|JWT_SECRET" | sed 's/=.*/=<redacted>/'
 ```
 
 ### "Manager отдаёт 401"
@@ -108,7 +142,15 @@ df -h /var/lib/clickhouse
 ```
 
 Запись настраивается `store.clickhouse_url` в config.toml. Ошибки записи не
-роняют edge — они уходят в debug-лог.
+роняют edge: события складываются в bounded-буфер (10 000) и при переполнении
+или таймауте учитываются в `rampart_clickhouse_dropped_total`.
+
+```bash
+curl -s http://EDGE_IP:9090/metrics | grep clickhouse_dropped
+```
+
+Растущий счётчик = ClickHouse не успевает; защита при этом работает, но
+аналитика теряет события.
 
 ---
 
