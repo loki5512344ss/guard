@@ -1,7 +1,7 @@
 //! Edge service wiring: whitelist parsing and the XDP startup path.
 //!
 //! These used to be inline `#[cfg(test)]` tests in `src/app/services.rs`; the
-//! project keeps tests out of source files (TODO.md §4). Kernel-touching
+//! project keeps tests out of source files (docs/development.md §4). Kernel-touching
 //! behaviour is not exercised here: `start_xdp` is called with `[xdp]`
 //! disabled, and the whitelist-map load needs a live interface.
 
