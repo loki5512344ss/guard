@@ -5,9 +5,7 @@
 use rampart::manager::sync::heartbeat::{NODES_KEY_PATTERN, offline_update};
 
 fn rfc3339(ts: i64) -> String {
-	chrono::DateTime::from_timestamp(ts, 0)
-		.expect("in-range timestamp")
-		.to_rfc3339()
+	rampart::timeutil::format_rfc3339(ts).expect("in-range timestamp")
 }
 
 #[test]

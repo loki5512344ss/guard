@@ -52,7 +52,7 @@ pub async fn list_blacklist(
 		.take(usize::try_from(limit).unwrap_or(usize::MAX))
 		.collect();
 	let metadata = load_metadata(&mut conn, &page).await?;
-	let now = chrono::Utc::now().timestamp();
+	let now = crate::timeutil::unix_now();
 	let items = page
 		.iter()
 		.filter_map(|target| entry(target, metadata.get(target), now))
@@ -116,8 +116,8 @@ fn entry(target: &str, metadata: Option<&Option<BlacklistMetadata>>, now: i64) -
 		None => legacy_metadata(now),
 	};
 	if record.expires_at_unix <= now
-		|| chrono::DateTime::from_timestamp(record.created_at_unix, 0).is_none()
-		|| chrono::DateTime::from_timestamp(record.expires_at_unix, 0).is_none()
+		|| !crate::timeutil::is_valid_unix(record.created_at_unix)
+		|| !crate::timeutil::is_valid_unix(record.expires_at_unix)
 	{
 		return None;
 	}

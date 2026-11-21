@@ -37,7 +37,7 @@ async fn check_nodes(state: &AppState) -> anyhow::Result<()> {
 	let mut conn = state.redis_client.get_multiplexed_async_connection().await?;
 	let keys = collect_node_keys(&mut conn).await?;
 
-	let now = chrono::Utc::now().timestamp();
+	let now = crate::timeutil::unix_now();
 
 	for key in &keys {
 		let raw: Option<String> = conn.get(key).await?;
@@ -73,8 +73,7 @@ pub fn offline_update(raw: &str, now: i64) -> Option<String> {
 	let mut node = serde_json::from_str::<serde_json::Value>(raw).ok()?;
 	let hb = node["last_heartbeat"]
 		.as_str()
-		.and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
-		.map(|t| t.timestamp())
+		.and_then(crate::timeutil::parse_rfc3339_unix)
 		.unwrap_or(0);
 	if now - hb <= NODE_TTL_SECS {
 		return None;

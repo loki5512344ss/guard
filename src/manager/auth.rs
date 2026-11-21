@@ -17,7 +17,7 @@ pub struct Claims {
 }
 
 pub fn create_token(secret: &str, expiration: u64, audience: &str) -> Result<String, jsonwebtoken::errors::Error> {
-	let now = chrono::Utc::now().timestamp() as usize;
+	let now = crate::timeutil::unix_now() as usize;
 	let claims = Claims {
 		sub: "rampart-admin".to_string(),
 		aud: audience.to_string(),

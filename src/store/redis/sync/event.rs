@@ -58,10 +58,10 @@ pub(super) fn handle(msg: &Msg, blacklist: &Blacklist) -> anyhow::Result<()> {
 ///
 /// Returns `Ok(None)` when the expiry is already in the past.
 fn absolute_duration(expires_at: i64) -> anyhow::Result<Option<Duration>> {
-	if chrono::DateTime::from_timestamp(expires_at, 0).is_none() {
+	if !crate::timeutil::is_valid_unix(expires_at) {
 		anyhow::bail!("invalid blacklist event expiry timestamp");
 	}
-	let remaining = expires_at.saturating_sub(chrono::Utc::now().timestamp());
+	let remaining = expires_at.saturating_sub(crate::timeutil::unix_now());
 	if remaining <= 0 {
 		return Ok(None);
 	}

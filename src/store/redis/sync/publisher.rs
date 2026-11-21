@@ -112,7 +112,7 @@ async fn publish_ban(
 	manager: &mut Option<ConnectionManager>,
 	event: &LocalBanEvent,
 ) -> anyhow::Result<()> {
-	let now = chrono::Utc::now().timestamp();
+	let now = crate::timeutil::unix_now();
 	let remaining = event.expires_at_unix.saturating_sub(now);
 	if remaining <= 0 {
 		return Ok(());

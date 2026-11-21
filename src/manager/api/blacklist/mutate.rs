@@ -37,7 +37,7 @@ pub async fn add_blacklist(
 	}
 
 	let target = ip.to_string();
-	let created_at_unix = chrono::Utc::now().timestamp();
+	let created_at_unix = crate::timeutil::unix_now();
 	let metadata = super::common::BlacklistMetadata {
 		created_at_unix,
 		expires_at_unix: created_at_unix + duration_secs as i64,

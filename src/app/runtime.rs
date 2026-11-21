@@ -235,7 +235,7 @@ async fn push_attack_event(writer: &Option<Arc<tokio::sync::Mutex<ClickHouseWrit
 		return;
 	};
 	let event = ClickHouseEvent {
-		timestamp: chrono::Utc::now(),
+		timestamp: time::OffsetDateTime::now_utc(),
 		event_type: "attack".to_string(),
 		ip: String::new(),
 		data_float: pps,

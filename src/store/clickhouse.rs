@@ -6,11 +6,11 @@
 //! request timeout and every flush by a global timeout, so an unreachable or
 //! hung ClickHouse degrades into dropped events instead of a stalled daemon.
 
-use chrono::{DateTime, Utc};
 use prometheus::IntCounter;
 use serde::Serialize;
 use std::sync::{Arc, LazyLock};
 use std::time::Duration;
+use time::OffsetDateTime;
 use tokio::sync::Mutex;
 use tokio::sync::watch;
 
@@ -39,7 +39,8 @@ pub static CLICKHOUSE_DROPPED: LazyLock<IntCounter> = LazyLock::new(|| {
 /// One row of the `rampart_events` table.
 #[derive(Debug, Clone, Serialize)]
 pub struct ClickHouseEvent {
-	pub timestamp: DateTime<Utc>,
+	#[serde(with = "time::serde::rfc3339")]
+	pub timestamp: OffsetDateTime,
 	pub event_type: String,
 	pub ip: String,
 	pub data_float: f64,

@@ -31,6 +31,9 @@
 
 ### Changed
 
+- `chrono` заменён на `time` (новый модуль `timeutil`): RUSTSEC-2026-0543 помечает `chrono` как
+  неподдерживаемый, `cargo deny` падал. Формат на проводе тот же (RFC 3339, но UTC теперь с
+  суффиксом `Z`, а не `+00:00`).
 - `[profile.release]`: `lto = "thin"`, `codegen-units = 1`. Релизный бинарь с
   `protocol-http` уменьшился с 12.3 МБ до 9.7 МБ (−21%); `http_parser/evaluate`
   в criterion — 314 нс → 278 нс (−12%), остальные бенчмарки в пределах шума.

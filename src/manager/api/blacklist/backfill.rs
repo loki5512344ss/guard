@@ -34,7 +34,7 @@ async fn backfill(state: &AppState) -> ApiResult<usize> {
 		.get_multiplexed_async_connection()
 		.await
 		.map_err(redis_unavailable)?;
-	let now = chrono::Utc::now().timestamp();
+	let now = crate::timeutil::unix_now();
 	let mut cursor = 0_u64;
 	let mut filled = 0_usize;
 	loop {

@@ -32,7 +32,7 @@ pub(super) async fn reconcile(manager: &ConnectionManager, blacklist: &Blacklist
 	let mut conn = manager.clone();
 	let members: Vec<String> = command(redis::cmd("SMEMBERS").arg(BLACKLIST_KEY).query_async(&mut conn)).await?;
 	let metadata: HashMap<String, String> = command(conn.hgetall(BLACKLIST_METADATA_KEY)).await?;
-	let now = chrono::Utc::now().timestamp();
+	let now = crate::timeutil::unix_now();
 	let mut active = Vec::with_capacity(members.len());
 
 	for target in members {
@@ -50,8 +50,8 @@ pub(super) async fn reconcile(manager: &ConnectionManager, blacklist: &Blacklist
 				None => continue,
 			},
 		};
-		if chrono::DateTime::from_timestamp(record.created_at_unix, 0).is_none()
-			|| chrono::DateTime::from_timestamp(record.expires_at_unix, 0).is_none()
+		if !crate::timeutil::is_valid_unix(record.created_at_unix)
+			|| !crate::timeutil::is_valid_unix(record.expires_at_unix)
 		{
 			continue;
 		}

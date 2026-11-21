@@ -73,7 +73,7 @@ impl Gateway {
 			return;
 		};
 		let event = ClickHouseEvent {
-			timestamp: chrono::Utc::now(),
+			timestamp: time::OffsetDateTime::now_utc(),
 			event_type: event_type.to_string(),
 			ip: ip.to_string(),
 			data_float: 0.0,

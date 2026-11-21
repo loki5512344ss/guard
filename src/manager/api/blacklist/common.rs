@@ -46,9 +46,7 @@ pub(super) fn legacy_metadata(now: i64) -> BlacklistMetadata {
 }
 
 pub(super) fn format_timestamp(timestamp: i64) -> String {
-	chrono::DateTime::from_timestamp(timestamp, 0)
-		.map(|value| value.to_rfc3339())
-		.unwrap_or_else(|| chrono::Utc::now().to_rfc3339())
+	crate::timeutil::format_rfc3339(timestamp).unwrap_or_else(crate::timeutil::now_rfc3339)
 }
 
 pub(super) fn event_payload(

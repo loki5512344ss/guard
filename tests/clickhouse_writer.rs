@@ -7,7 +7,7 @@ use rampart::store::clickhouse::{ClickHouseEvent, ClickHouseWriter, MAX_BUFFER_E
 
 fn event(seq: usize) -> ClickHouseEvent {
 	ClickHouseEvent {
-		timestamp: chrono::Utc::now(),
+		timestamp: time::OffsetDateTime::now_utc(),
 		event_type: "test".to_string(),
 		ip: format!("192.0.2.{}", seq % 250),
 		data_float: 0.0,
