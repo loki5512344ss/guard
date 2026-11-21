@@ -102,7 +102,16 @@ async fn protected_routes_require_a_token() {
 #[tokio::test]
 async fn blacklist_rejects_invalid_targets() {
 	let router = app();
-	for target in ["not-an-ip", "10.0.0.0/8", "999.1.1.1", ""] {
+	for target in [
+		"not-an-ip",
+		"10.0.0.0/8",
+		"0.0.0.0/0",
+		"::/0",
+		"1.2.3.4/32",
+		"1.2.3.4/33",
+		"999.1.1.1",
+		"",
+	] {
 		let body = format!(r#"{{"target":"{target}","type":"ip","reason":"manual_ban"}}"#);
 		let response = status(
 			&router,

@@ -1,9 +1,10 @@
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::net::{IpAddr, Ipv4Addr};
 
-use anyhow::{Result, bail};
+use anyhow::Result;
 use libbpf_rs::{MapCore, MapFlags};
 
 use super::XdpFilter;
+use super::cidr::canonical_cidr;
 use crate::xdp::probe::{blacklist_expiry_ns, monotonic_ns};
 
 /// Encodes an LPM-trie key for `blacklist_map` and `whitelist_map`:
@@ -50,56 +51,6 @@ fn ipv6_lpm_key(prefix_len: u8, v6: &[u8; 16]) -> [u8; 20] {
 	key
 }
 
-/// Validates a CIDR prefix length and clears the host bits of `prefix`.
-///
-/// The kernel's LPM trie compares keys bit by bit, so `10.1.2.3/24` and
-/// `10.1.2.0/24` are different keys for the same range: without masking, two
-/// bans of the same subnet never share an entry and expiry bookkeeping falls
-/// apart. A zero-length prefix is rejected because "ban the entire address
-/// space" is never an intentional operator request.
-///
-/// # Errors
-/// `prefix_len` is 0 or exceeds 32 for IPv4 / 128 for IPv6.
-pub fn normalize_cidr(prefix: IpAddr, prefix_len: u8) -> Result<IpAddr> {
-	match prefix {
-		IpAddr::V4(addr) => {
-			ensure_prefix_len(prefix_len, 32, "IPv4")?;
-			Ok(IpAddr::V4(Ipv4Addr::from(mask_v4(addr, prefix_len))))
-		},
-		IpAddr::V6(addr) => {
-			ensure_prefix_len(prefix_len, 128, "IPv6")?;
-			Ok(IpAddr::V6(Ipv6Addr::from(mask_v6(addr, prefix_len))))
-		},
-	}
-}
-
-fn ensure_prefix_len(prefix_len: u8, max: u8, family: &str) -> Result<()> {
-	if prefix_len == 0 || prefix_len > max {
-		bail!("invalid {family} prefix length {prefix_len}: expected 1..={max}");
-	}
-	Ok(())
-}
-
-fn mask_v4(addr: Ipv4Addr, prefix_len: u8) -> [u8; 4] {
-	let bits = u32::from(addr);
-	let mask = u32::MAX << (32 - u32::from(prefix_len));
-	(bits & mask).to_be_bytes()
-}
-
-fn mask_v6(addr: Ipv6Addr, prefix_len: u8) -> [u8; 16] {
-	let mut octets = addr.octets();
-	let full_bytes = usize::from(prefix_len) / 8;
-	let remainder = prefix_len % 8;
-	for byte in octets.iter_mut().skip(full_bytes) {
-		*byte = 0;
-	}
-	if remainder != 0 {
-		// `full_bytes` is always < 16 here: a partial byte follows the full ones.
-		octets[full_bytes] &= 0xffu8 << (8 - remainder);
-	}
-	octets
-}
-
 impl XdpFilter {
 	/// Adds a CIDR ban to the matching LPM trie: `blacklist_map` for IPv4,
 	/// `blacklist6_map` for IPv6.
@@ -111,9 +62,9 @@ impl XdpFilter {
 	/// Invalid prefix length, XDP not loaded, map missing from the object, or
 	/// a BPF update failure.
 	pub fn ban_cidr(&self, prefix: IpAddr, prefix_len: u8, duration_secs: u64) -> Result<()> {
-		match normalize_cidr(prefix, prefix_len)? {
-			IpAddr::V4(net) => self.blacklist_update(prefix_len, &net.octets(), duration_secs),
-			IpAddr::V6(net) => self.blacklist6_update(prefix_len, &net.octets(), duration_secs),
+		match canonical_cidr(prefix, prefix_len)? {
+			(IpAddr::V4(net), len) => self.blacklist_update(len, &net.octets(), duration_secs),
+			(IpAddr::V6(net), len) => self.blacklist6_update(len, &net.octets(), duration_secs),
 		}
 	}
 
@@ -156,14 +107,14 @@ impl XdpFilter {
 	/// Invalid prefix length, XDP not loaded, map missing from the object, or
 	/// a BPF update failure.
 	pub fn whitelist_add_cidr(&self, prefix: IpAddr, prefix_len: u8) -> Result<()> {
-		match normalize_cidr(prefix, prefix_len)? {
-			IpAddr::V4(net) => {
+		match canonical_cidr(prefix, prefix_len)? {
+			(IpAddr::V4(net), len) => {
 				let map = self.find_map("whitelist_map")?;
-				map.update(&whitelist_key(prefix_len, &net.octets()), &[1u8], MapFlags::ANY)?;
+				map.update(&whitelist_key(len, &net.octets()), &[1u8], MapFlags::ANY)?;
 			},
-			IpAddr::V6(net) => {
+			(IpAddr::V6(net), len) => {
 				let map = self.find_map("whitelist6_map")?;
-				map.update(&whitelist6_key(prefix_len, &net.octets()), &[1u8], MapFlags::ANY)?;
+				map.update(&whitelist6_key(len, &net.octets()), &[1u8], MapFlags::ANY)?;
 			},
 		}
 		Ok(())
@@ -175,6 +126,11 @@ impl XdpFilter {
 	/// XDP not loaded, the matching whitelist map is missing, or a BPF delete
 	/// failure.
 	pub fn whitelist_remove(&self, ip: IpAddr) -> Result<()> {
+		// Fold mapped IPv6 into IPv4: that is the trie `whitelist_add` stored it in.
+		let ip = match ip {
+			IpAddr::V6(v6) => v6.to_ipv4_mapped().map_or(ip, IpAddr::V4),
+			IpAddr::V4(_) => ip,
+		};
 		match ip {
 			IpAddr::V4(addr) => {
 				let map = self.find_map("whitelist_map")?;
