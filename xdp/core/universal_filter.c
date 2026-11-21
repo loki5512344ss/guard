@@ -253,13 +253,19 @@ int rampart_universal_filter(struct xdp_md *ctx)
     __u8 is_ipv6 = 0;
     __u8 native_v6 = 0;
     __u8 is_fragment = 0;
+    // Protocols the filter cannot inspect (ICMP, GRE, ESP, an IPv6 chain that
+    // does not end in TCP/UDP): never a free pass, the source blacklist still
+    // applies below. They used to return XDP_PASS before any list was read.
+    __u8 l4_unfiltered = 0;
+    __u16 v6_ext_len = 0;
+    void *v6_l4 = NULL;
     __u8 src6[16];
 
     if (eth_proto == bpf_htons(ETH_P_IP)) {
         struct iphdr *ip = l3;
         if ((void *)(ip + 1) > data_end)
             return XDP_PASS;
-        if (ip->ihl < 5) {
+        if (ip->version != 4 || ip->ihl < 5) {
             inc_drop();
             return XDP_DROP;
         }
@@ -275,7 +281,7 @@ int rampart_universal_filter(struct xdp_md *ctx)
         if (ip->frag_off & bpf_htons(IP_OFFSET | IP_MF)) {
             is_fragment = 1;
         } else if (ip->protocol != IPPROTO_TCP && ip->protocol != IPPROTO_UDP) {
-            return XDP_PASS;
+            l4_unfiltered = 1;
         }
     } else {
         struct ipv6hdr *ip6 = l3;
@@ -286,13 +292,34 @@ int rampart_universal_filter(struct xdp_md *ctx)
         // when it is IPv4-mapped; the low 32 bits are used for flow keys.
         __builtin_memcpy(src6, &ip6->saddr, 16);
         is_ipv6  = 1;
-        l4_proto = ip6->nexthdr;
+        // Walk hop-by-hop / routing / destination-options / AH headers to the
+        // real L4 header. Returning XDP_PASS on the first extension header let
+        // any IPv6 flood skip the blacklist, throttle and port gate by adding
+        // one (kernel stacks process these headers normally).
+        __u8 nh = ip6->nexthdr;
+        void *ext = (void *)(ip6 + 1);
+#pragma unroll
+        for (int i = 0; i < RAMPART_V6_MAX_EXT; i++) {
+            if (nh != IPPROTO_HOPOPTS && nh != IPPROTO_ROUTING &&
+                nh != IPPROTO_DSTOPTS && nh != IPPROTO_AH)
+                break;
+            struct rampart_ipv6_ext *eh = ext;
+            if ((void *)(eh + 1) > data_end)
+                return XDP_PASS;
+            __u16 elen = (nh == IPPROTO_AH) ? ((__u16)eh->hdrlen + 2) * 4
+                                            : ((__u16)eh->hdrlen + 1) * 8;
+            nh  = eh->nexthdr;
+            ext = (void *)((__u8 *)ext + elen);
+        }
+        l4_proto  = nh;
+        v6_l4     = ext;
+        v6_ext_len = (__u16)((__u8 *)ext - (__u8 *)(ip6 + 1));
 
         // A fragment header hides the L4 header; same policy as IPv4.
-        if (ip6->nexthdr == IPPROTO_FRAGMENT) {
+        if (nh == IPPROTO_FRAGMENT) {
             is_fragment = 1;
-        } else if (ip6->nexthdr != IPPROTO_TCP && ip6->nexthdr != IPPROTO_UDP) {
-            return XDP_PASS; // extension headers not walked
+        } else if (nh != IPPROTO_TCP && nh != IPPROTO_UDP) {
+            l4_unfiltered = 1;
         }
 
         // Use IPv4-mapped IPv6 address for flow key (::ffff:0:0/96)
@@ -337,7 +364,7 @@ int rampart_universal_filter(struct xdp_md *ctx)
     // Fragments: the L4 ports are missing or incomplete, so the stateful and
     // throttle logic cannot run. Apply the source blacklist and pass; the
     // dedicated counter keeps this deliberate bypass observable.
-    if (is_fragment) {
+    if (is_fragment || l4_unfiltered) {
         __u8 banned = native_v6 ? is_blacklisted6(src6, now)
                                 : is_blacklisted(src_ip, now);
         if (banned) {
@@ -347,7 +374,8 @@ int rampart_universal_filter(struct xdp_md *ctx)
                 push_event(EVENT_BAN, src_ip, 0);
             return XDP_DROP;
         }
-        inc_fragment_bypass();
+        if (is_fragment)
+            inc_fragment_bypass();
         inc_pass();
         return XDP_PASS;
     }
@@ -357,8 +385,7 @@ int rampart_universal_filter(struct xdp_md *ctx)
     void *l4;
 
     if (is_ipv6) {
-        struct ipv6hdr *ip6 = l3;
-        l4 = (void *)(ip6 + 1);
+        l4 = v6_l4;
         ip_hdr_len = sizeof(struct ipv6hdr);
     } else {
         struct iphdr *ip = l3;
@@ -416,7 +443,12 @@ int rampart_universal_filter(struct xdp_md *ctx)
                 return XDP_PASS;
             }
         }
-        // TCP: forged-flag combos are L4-generic, no state needed
+        // TCP: forged-flag combos are L4-generic, no state needed. The full
+        // TCP header must be in bounds: the earlier gate only proved the size
+        // for the protocol class it saw, and the verifier cannot correlate the
+        // two once l4_proto comes from the extension-header walk.
+        if ((void *)l4 + sizeof(struct tcphdr) > data_end)
+            return XDP_PASS;
         if (detect_tcp_bypass((struct tcphdr *)l4)) {
             inc_drop();
             return XDP_DROP;
@@ -467,6 +499,8 @@ int rampart_universal_filter(struct xdp_md *ctx)
 
     // TCP path.
     struct tcphdr *tcp = l4;
+    if ((void *)(tcp + 1) > data_end)
+        return XDP_PASS;
 
     // Malicious TCP flags
     if (detect_tcp_bypass(tcp)) {
@@ -500,7 +534,13 @@ int rampart_universal_filter(struct xdp_md *ctx)
     __u32 l4_len;
     if (is_ipv6) {
         struct ipv6hdr *ip6 = l3;
-        l4_len = sizeof(struct ipv6hdr) + bpf_ntohs(ip6->payload_len);
+        __u16 payload_len = bpf_ntohs(ip6->payload_len);
+        if (payload_len < v6_ext_len) {
+            inc_drop();
+            return XDP_DROP;
+        }
+        // payload_len counts the extension headers; l4 starts after them.
+        l4_len = payload_len - v6_ext_len;
     } else {
         struct iphdr *ip = l3;
         __u16 tot_len = bpf_ntohs(ip->tot_len);

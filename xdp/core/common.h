@@ -12,6 +12,13 @@
 #define IPPROTO_TCP 6
 #define IPPROTO_UDP 17
 #define IPPROTO_FRAGMENT 44
+#define IPPROTO_HOPOPTS 0
+#define IPPROTO_ROUTING 43
+#define IPPROTO_AH 51
+#define IPPROTO_DSTOPTS 60
+/* Extension headers walked before giving up; a longer chain is treated as
+ * "L4 not found" (source blacklist only), never as a free pass. */
+#define RAMPART_V6_MAX_EXT 4
 #define IP_OFFSET 0x1FFF
 #define IP_MF 0x2000
 
@@ -24,6 +31,15 @@
 struct rampart_vlan_hdr {
     __u16 tci;          // PCP/DEI/VID, unused
     __u16 encap_proto;  // EtherType of the next header
+};
+
+/**
+ * First two bytes shared by every IPv6 extension header that carries a length
+ * (hop-by-hop, routing, destination options, AH).
+ */
+struct rampart_ipv6_ext {
+    __u8 nexthdr;
+    __u8 hdrlen;  // 8-byte units minus 1 (AH: 4-byte units minus 2)
 };
 
 /**

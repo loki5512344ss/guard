@@ -67,17 +67,19 @@ ok "verifier принял программу, attach на $DEV0"
 discover_maps() {
 	IDS=$(bpftool prog show pinned "$PIN" | grep -o 'map_ids [0-9,]*' | cut -d' ' -f2 | tr ',' ' ')
 	B4=""
+	B6=""
 	CT=""
 	ST=""
 	for id in $IDS; do
 		desc=$(bpftool map show id "$id" 2>/dev/null)
 		case "$desc" in
 			*"name blacklist_map"*) B4=$id ;;
+			*"name blacklist6_map"*) B6=$id ;;
 			*"name conntrack_map"*) CT=$id ;;
 			*"name stats_map"*) ST=$id ;;
 		esac
 	done
-	[ -n "$B4" ] && [ -n "$CT" ] && [ -n "$ST" ]
+	[ -n "$B4" ] && [ -n "$B6" ] && [ -n "$CT" ] && [ -n "$ST" ]
 }
 discover_maps || { echo "карты не найдены"; exit 1; }
 ok "blacklist_map id=$B4, conntrack_map id=$CT, stats_map id=$ST"
@@ -157,7 +159,36 @@ def tcp(args):
     emit(0x0800, ip4(6, hdr + data), 0, pad)
 
 
-{"udp": udp, "frag": frag, "tcp": tcp}[kind](sys.argv[5:])
+def other(args):
+    # IPv4 with a protocol the filter does not inspect (ICMP 1, GRE 47, ...).
+    proto = int(args[0], 0)
+    emit(0x0800, ip4(proto, b"\0" * 16), 0, 0)
+
+
+SRC6 = bytes.fromhex("fd000088000000000000000000000002")
+DST6 = bytes.fromhex("fd000088000000000000000000000001")
+
+
+def ext_hdr(next_hdr):
+    # 8 bytes: next header, length 0, PadN option filling the rest.
+    return bytes([next_hdr, 0, 1, 4, 0, 0, 0, 0])
+
+
+def v6udp(args):
+    # args: sport dport count-of-destination-options-headers
+    sport, dport, n_ext = (int(a, 0) for a in args)
+    udp = struct.pack("!HHHH", sport, dport, 16, 0) + b"w" * 8
+    # Chain of n destination-options headers (60), then UDP (17).
+    chain = b""
+    for i in range(n_ext):
+        chain += ext_hdr(60 if i < n_ext - 1 else 17)
+    first = 60 if n_ext else 17
+    payload = chain + udp
+    hdr = struct.pack("!IHBB", 0x60000000, len(payload), first, 64) + SRC6 + DST6
+    emit(0x86DD, hdr + payload, 0, 0)
+
+
+{"udp": udp, "frag": frag, "tcp": tcp, "other": other, "v6udp": v6udp}[kind](sys.argv[5:])
 PY
 
 send() { ip netns exec "$NS" python3 "$WORK/send.py" "$DEV1" "$NS4" "$HOST4" "$@"; }
@@ -237,5 +268,49 @@ for e in json.load(sys.stdin):
 	&& ok "expected_seq учёл 4 байта payload, а не 20 байт кадра (expected_seq=$got)" \
 	|| fail "expected_seq=$got, ожидалось 1005 (паддинг попал в payload)"
 
-[ "$PASS" = 1 ] && echo "PASS: VLAN/QinQ, фрагменты и паддинг обрабатываются корректно" || echo "FAIL"
+# Phase 5: protocols the filter cannot inspect (ICMP, GRE) are not a free pass for
+# a banned source; a clean source still passes.
+bpftool map update id "$B4" key hex $KEY4 value hex $BAN || fail "ban $NS4 (phase 5)"
+drop0=$(metric drop)
+send other 1
+send other 47
+sleep 0.3
+drop1=$(metric drop)
+[ "${drop1:-0}" -ge $((${drop0:-0} + 2)) ] \
+	&& ok "ICMP/GRE от забаненного источника дропаются (drop $drop0 -> $drop1)" \
+	|| fail "ICMP/GRE прошли мимо бана (drop $drop0 -> $drop1, $(stats))"
+bpftool map delete id "$B4" key hex $KEY4 || fail "unban $NS4 (phase 5)"
+pass0=$(metric pass)
+send other 1
+send other 47
+sleep 0.3
+pass1=$(metric pass)
+drop2=$(metric drop)
+[ "${pass1:-0}" -ge $((${pass0:-0} + 2)) ] && [ "${drop2:-0}" = "${drop1:-0}" ] \
+	&& ok "ICMP/GRE от чистого источника проходят (pass $pass0 -> $pass1)" \
+	|| fail "ICMP/GRE чистого источника не прошли (pass $pass0 -> $pass1, drop $drop1 -> $drop2)"
+
+# Phase 6: IPv6 extension headers must not hide L4 from the filter. 0 headers is the
+# control; 1 and 2 are walked; 5 exceeds the walk limit (4) and must still hit the
+# source blacklist instead of being passed unseen.
+KEY6="80 00 00 00 fd 00 00 88 00 00 00 00 00 00 00 00 00 00 00 02"
+bpftool map update id "$B6" key hex $KEY6 value hex $BAN || fail "ban v6 source"
+drop0=$(metric drop)
+for n in 0 1 2 5; do send v6udp 5100 $PORT $n; done
+sleep 0.3
+drop1=$(metric drop)
+[ "${drop1:-0}" -ge $((${drop0:-0} + 4)) ] \
+	&& ok "IPv6 (0/1/2/5 extension headers) от забаненного источника дропается (drop $drop0 -> $drop1)" \
+	|| fail "IPv6 с extension headers прошёл мимо бана (drop $drop0 -> $drop1, $(stats))"
+bpftool map delete id "$B6" key hex $KEY6 || fail "unban v6 source"
+pass0=$(metric pass)
+for n in 0 1 2 5; do send v6udp 5101 $PORT $n; done
+sleep 0.3
+pass1=$(metric pass)
+drop2=$(metric drop)
+[ "${pass1:-0}" -ge $((${pass0:-0} + 4)) ] && [ "${drop2:-0}" = "${drop1:-0}" ] \
+	&& ok "IPv6 с extension headers от чистого источника проходит (pass $pass0 -> $pass1)" \
+	|| fail "IPv6 чистого источника с extension headers не прошёл (pass $pass0 -> $pass1, drop $drop1 -> $drop2)"
+
+[ "$PASS" = 1 ] && echo "PASS: VLAN/QinQ, фрагменты, паддинг, ICMP/GRE и IPv6 extension headers обрабатываются корректно" || echo "FAIL"
 [ "$PASS" = 1 ]

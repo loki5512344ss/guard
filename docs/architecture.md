@@ -42,8 +42,8 @@ client → eth0 → [XDP/eBPF] → kernel TCP → accept → Gateway → plugin 
 
 ### 3.1 XDP (C, `xdp/core/`)
 
-Stateless-фильтр на входе интерфейса. Разбирает Ethernet (VLAN/QinQ), IPv4/IPv6,
-L4; порт-гейт `[xdp] protected_port_start/end` отсекает нецелевой трафик до
+Stateless-фильтр на входе интерфейса. Разбирает Ethernet (VLAN/QinQ), IPv4/IPv6
+(для IPv6 — до 4 extension-заголовков до L4), L4; порт-гейт `[xdp] protected_port_start/end` отсекает нецелевой трафик до
 фильтра.
 
 | Механизм | IPv4 | IPv6 |
