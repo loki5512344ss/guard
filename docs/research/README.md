@@ -24,6 +24,7 @@
 | [benchmark.md](./benchmark.md) | Инструменты, методология, ожидаемые результаты | v0.3 |
 | [security.md](./security.md) | STRIDE, mTLS, Zero Trust, supply chain | v0.2 |
 | [networking.md](./networking.md) | WireGuard, BGP Anycast, QUIC, MTU | v0.3 |
+| [ref-projects-2026-11.md](./ref-projects-2026-11.md) | Разбор внешних проектов из `ref/`: лицензии, что взято в roadmap, что отвергнуто | v0.5 |
 | [papers.md](./papers.md) | Ссылки на статьи, RFC, проекты для изучения | - |
 
 ---
