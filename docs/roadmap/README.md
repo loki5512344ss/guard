@@ -59,8 +59,8 @@
 | gRPC protocol plugin | P2 | idea | [v0.5-grpc-plugin.md](v0.5-grpc-plugin.md) |
 | XDP: IPv6-паритет для L4 | P1 | idea | [v0.5-xdp-ipv6-parity.md](v0.5-xdp-ipv6-parity.md) |
 | Аудит XDP-фильтра и тесты без root | P1 | in-progress | [v0.5-xdp-filter-audit.md](v0.5-xdp-filter-audit.md) |
-| Minecraft: гигиена handshake/login | P1 | idea | [v0.5-minecraft-handshake-hygiene.md](v0.5-minecraft-handshake-hygiene.md) |
-| Управление банами: теги, наборы, API | P2 | idea | [v0.5-control-plane-bans.md](v0.5-control-plane-bans.md) |
+| Minecraft: гигиена handshake/login | P1 | in-progress | [v0.5-minecraft-handshake-hygiene.md](v0.5-minecraft-handshake-hygiene.md) |
+| Управление банами: теги, наборы, API | P2 | in-progress | [v0.5-control-plane-bans.md](v0.5-control-plane-bans.md) |
 | Пакеты и релизный процесс | P2 | idea | [v0.5-packaging-release.md](v0.5-packaging-release.md) |
 | Хвосты XDP-харнесса и эксплуатации | P1 | idea | [v0.5-xdp-hardening-followups.md](v0.5-xdp-hardening-followups.md) |
 | PoW: непрерывная сложность | P2 | idea | [v0.5-pow-continuous-difficulty.md](v0.5-pow-continuous-difficulty.md) |

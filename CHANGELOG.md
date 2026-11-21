@@ -9,6 +9,19 @@
 
 ### Added
 
+- Minecraft: строгий автомат handshake→login/status (дубли handshake/login-start, login до
+  handshake, плохой hostname/next_state/версия/ник → тихое закрытие); лимиты кадра по фазе до
+  буферизации (handshake 2048, login-start 5120, status request 64, настраиваются в
+  `[protocol.minecraft]`); таблица версий протокола, `min/max_protocol_version` и
+  `deny_protocol_versions`; метрики `rampart_mc_handshake_total{result,reason}` и
+  `rampart_mc_protocol_version_total{version}`.
+- CLI: `rampart-cli blacklist add --for 1h30m` принимает человекочитаемые длительности (`30s`,
+  `5m`, `1h30m`, `2d`), голое число отвергается с подсказкой; `blacklist list` показывает
+  оставшееся время.
+- API: `POST /api/v1/blacklist` принимает абсолютный `expires_at` (unix-секунды) вместо
+  `duration_secs`; ответ содержит `expires_at`.
+- Тесты: ABI-раскладка Rust-зеркал BPF-структур, порядок байт IPv6-ключей, валидация CIDR,
+  суммирование per-CPU счётчиков.
 - `scripts/xdp_ci.sh` — единая точка входа XDP-проверок на реальном ядре (`RESULT … PASS|FAIL|SKIP`,
   честный SKIP без прав/инструментов, `--require`), CI-job `xdp-kernel`. Smoke получил фазу
   recovery (`ip link set dev <if> xdp off` после `kill -9`).
@@ -41,6 +54,12 @@
 
 ### Fixed
 
+- **XDP: бан и whitelist для IPv4-mapped IPv6 CIDR не работали** (`::ffff:a.b.c.d/N` попадал
+  в IPv6-trie, где IPv4-пакет его не находил). Теперь `canonical_cidr` сворачивает такие
+  префиксы в IPv4; userspace-таблица CIDR делает то же, маски через `checked_shl`.
+- Строгая валидация целей бана и портов в CLI/API: пробелы по краям (раньше обрезались,
+  теперь 400), мусор после адреса, `/0`, префикс > 32/128. Ошибка слишком большой
+  `duration_secs` теперь «ban duration must not exceed one year».
 - **XDP: IPv6 с extension-заголовком обходил весь фильтр.** Любой заголовок hop-by-hop,
   routing, destination options или AH (стек ядра их обрабатывает) давал `XDP_PASS` до
   whitelist/blacklist/throttle/порт-гейта. Теперь цепочка (до 4 заголовков) разбирается до
