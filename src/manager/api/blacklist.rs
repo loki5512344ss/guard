@@ -32,6 +32,8 @@ pub struct AddBlacklistRequest {
 	pub entry_type: String,
 	pub reason: String,
 	pub duration_secs: Option<u64>,
+	/// Absolute expiry in unix seconds; mutually exclusive with `duration_secs`.
+	pub expires_at: Option<i64>,
 }
 
 #[derive(Deserialize)]

@@ -34,7 +34,12 @@ systemctl restart rampart
 
 # B) Атака с известных подсетей → внести в blacklist через Manager API или CLI:
 rampart-cli blacklist add 1.2.3.4 "ddos source"
-rampart-cli blacklist list
+rampart-cli blacklist add 1.2.3.4 "ddos source" --for 1h30m   # 30s, 5m, 1h30m, 2d
+#    Голое число (--for 90) отвергается: единицы указываются явно (s, m, h, d).
+#    Без --for действует срок по умолчанию manager API (300 с).
+#    Отдельного старого флага --duration-secs в CLI нет; в API поле duration_secs
+#    остаётся (и появился альтернативный абсолютный expires_at).
+rampart-cli blacklist list    # показывает оставшееся время, например [1h29m left]
 
 # C) Доверенные IP (мониторинг, админы) → whitelist в config.toml
 #    (только IP-адреса), затем systemctl restart rampart

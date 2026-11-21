@@ -102,7 +102,19 @@ async fn protected_routes_require_a_token() {
 #[tokio::test]
 async fn blacklist_rejects_invalid_targets() {
 	let router = app();
-	for target in ["not-an-ip", "10.0.0.0/8", "999.1.1.1", ""] {
+	for target in [
+		"not-an-ip",
+		"10.0.0.0/8",
+		"999.1.1.1",
+		"",
+		" 1.2.3.4",
+		"1.2.3.4 ",
+		"1.2.3.4x",
+		"1.2.3.4/0",
+		"1.2.3.4/33",
+		"::1/129",
+		"1.2.3.4/+8",
+	] {
 		let body = format!(r#"{{"target":"{target}","type":"ip","reason":"manual_ban"}}"#);
 		let response = status(
 			&router,
@@ -279,4 +291,50 @@ fn list_query_is_capped_regardless_of_the_request() {
 		.bounds(),
 		(0, 0)
 	);
+}
+
+async fn post_ban(router: &Router, extra: &str) -> StatusCode {
+	let body = format!(r#"{{"target":"1.2.3.4","type":"ip","reason":"manual_ban"{extra}}}"#);
+	status(
+		router,
+		authorized(request(Method::POST, "/api/v1/blacklist", Body::from(body))),
+	)
+	.await
+}
+
+#[tokio::test]
+async fn ban_accepts_absolute_expiry_as_an_alternative_to_duration() {
+	let router = app();
+	let now = rampart::timeutil::unix_now();
+	// Valid requests pass validation and fail only at the unreachable Redis (503).
+	for extra in [
+		String::new(),
+		r#","duration_secs":3600"#.to_string(),
+		format!(r#","expires_at":{}"#, now + 3600),
+		format!(r#","expires_at":{}"#, now + 31_536_000 - 5),
+	] {
+		assert_eq!(
+			post_ban(&router, &extra).await,
+			StatusCode::SERVICE_UNAVAILABLE,
+			"{extra}"
+		);
+	}
+}
+
+#[tokio::test]
+async fn ban_rejects_invalid_expiry_combinations() {
+	let router = app();
+	let now = rampart::timeutil::unix_now();
+	for extra in [
+		format!(r#","duration_secs":60,"expires_at":{}"#, now + 60),
+		format!(r#","expires_at":{}"#, now - 10),
+		r#","expires_at":0"#.to_string(),
+		r#","expires_at":-5"#.to_string(),
+		format!(r#","expires_at":{}"#, now + 31_536_000 + 60),
+		format!(r#","expires_at":{}"#, i64::MAX),
+		r#","duration_secs":0"#.to_string(),
+		r#","duration_secs":31536001"#.to_string(),
+	] {
+		assert_eq!(post_ban(&router, &extra).await, StatusCode::BAD_REQUEST, "{extra}");
+	}
 }

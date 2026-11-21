@@ -1,3 +1,4 @@
 //! CLI commands used by `bin/rampart-cli`.
 #[allow(clippy::print_stdout, clippy::print_stderr)]
 pub mod commands;
+pub mod duration;

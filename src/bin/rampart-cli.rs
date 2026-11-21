@@ -41,8 +41,22 @@ enum Commands {
 
 #[derive(Subcommand)]
 enum BlacklistAction {
-	Add { target: String, reason: Option<String> },
-	Remove { target: String },
+	/// Ban an address, optionally for a limited time (`--for 1h30m`)
+	Add {
+		/// Single IPv4/IPv6 address
+		#[arg(value_parser = commands::blacklist::parse_target_arg)]
+		target: String,
+		reason: Option<String>,
+		/// Ban duration: 30s, 5m, 1h30m, 2d (a bare number is rejected)
+		#[arg(long = "for", value_name = "DURATION", value_parser = commands::blacklist::parse_duration_arg)]
+		duration: Option<u64>,
+	},
+	/// Remove a ban
+	Remove {
+		#[arg(value_parser = commands::blacklist::parse_target_arg)]
+		target: String,
+	},
+	/// List active bans with remaining time
 	List,
 }
 
@@ -61,7 +75,11 @@ async fn main() -> anyhow::Result<()> {
 		Commands::Doctor => commands::doctor::run().await,
 		Commands::Config { key, value } => commands::config::run(key, value).await,
 		Commands::Blacklist { action } => match action {
-			BlacklistAction::Add { target, reason } => commands::blacklist::add(target, reason).await,
+			BlacklistAction::Add {
+				target,
+				reason,
+				duration,
+			} => commands::blacklist::add(target, reason, duration).await,
 			BlacklistAction::Remove { target } => commands::blacklist::remove(target).await,
 			BlacklistAction::List => commands::blacklist::list().await,
 		},
