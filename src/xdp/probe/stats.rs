@@ -71,9 +71,12 @@ impl XdpFilter {
 		let map = self.find_map("stats_map")?;
 		let sum = |idx: u32| -> u64 {
 			let key = idx.to_le_bytes();
-			match map.lookup(&key, MapFlags::ANY) {
-				Ok(Some(v)) => v
-					.chunks_exact(8)
+			// `stats_map` is a percpu_array: plain `lookup` does not support it and
+			// the failure would silently read as zero, so sum the per-CPU slots.
+			match map.lookup_percpu(&key, MapFlags::ANY) {
+				Ok(Some(slots)) => slots
+					.iter()
+					.flat_map(|slot| slot.chunks_exact(8))
 					.map(|c| u64::from_le_bytes(c.try_into().expect("chunk size 8")))
 					.sum(),
 				_ => 0,

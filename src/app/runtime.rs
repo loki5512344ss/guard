@@ -14,6 +14,7 @@ use crate::traffic::hook::TrafficHook;
 use crate::traffic::intel::detector::{AttackDetector, AttackStatus};
 use crate::traffic::intel::reputation::IpReputation;
 use crate::traffic::profile::alert::{AlertDispatcher, send_webhook};
+use crate::xdp::XdpFilter;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -41,7 +42,8 @@ fn attack_status_value(status: AttackStatus) -> i64 {
 /// Startup failures: unreadable config, empty protocol registry, listener error.
 pub async fn run() -> anyhow::Result<RunExit> {
 	tracing_subscriber::fmt()
-		.with_env_filter(EnvFilter::from_default_env().add_directive("rampart=info".parse()?))
+		// RUST_LOG wins when set; a forced `rampart=info` directive would cap it.
+		.with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("rampart=info")))
 		.init();
 
 	let config_path = std::env::var("RAMPART_CONFIG").unwrap_or_else(|_| "/etc/rampart/config.toml".to_string());
@@ -203,6 +205,9 @@ pub async fn run() -> anyhow::Result<RunExit> {
 	// The configured difficulty is the floor and the starting point; the
 	// adjuster only raises it under load.
 	let adjuster = Arc::new(Mutex::new(DifficultyAdjuster::with_floor(config.pow.difficulty)));
+	// Kept for the shutdown path: the polling thread detaches only after its sleep,
+	// which the process exit would cut short and leave the program on the NIC.
+	let xdp_for_shutdown = xdp_filter.clone();
 	let gateway = Arc::new(Gateway::new(
 		config.clone(),
 		rate_limiter,
@@ -216,14 +221,29 @@ pub async fn run() -> anyhow::Result<RunExit> {
 		registry,
 		subnet_tracker,
 	));
-	tokio::select! {
-		result = listener::run(config, gateway, hook, shutdown_rx) => {
-			result?;
-			Ok(RunExit::Ok)
-		}
+	let exit = tokio::select! {
+		result = listener::run(config, gateway, hook, shutdown_rx) => result.map(|()| RunExit::Ok),
 		// The drain timeout fired: hand the signal back so the binary can end the
 		// process immediately, replacing the former `process::exit(0)`.
 		_ = drain_rx => Ok(RunExit::DrainTimeout),
+	};
+	detach_xdp(xdp_for_shutdown.as_ref());
+	exit
+}
+
+/// Detaches the XDP program before the process exits, so a stopped edge never
+/// leaves a filter dropping traffic with nobody reading its events.
+fn detach_xdp(xdp: Option<&Arc<Mutex<XdpFilter>>>) {
+	let Some(xdp) = xdp else {
+		return;
+	};
+	match xdp.lock() {
+		Ok(mut guard) => {
+			if let Err(e) = guard.unload() {
+				tracing::error!(error = %e, "XDP detach on shutdown failed; run `ip link set dev <if> xdp off`");
+			}
+		},
+		Err(_) => tracing::error!("XDP lock poisoned on shutdown; run `ip link set dev <if> xdp off`"),
 	}
 }
 

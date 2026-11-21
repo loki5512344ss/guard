@@ -66,7 +66,7 @@ address = "$EDGE_IP"
 port = $EDGE_PORT
 
 [backend]
-upstreams = ["$HOST_IP:$ORIGIN_PORT"]
+upstreams = ["127.0.0.1:$ORIGIN_PORT"]
 
 [limits]
 handshake_timeout_secs = 5
@@ -92,16 +92,18 @@ enabled = true
 port = $METRICS_PORT
 
 [logging]
-level = "info"
+# debug: the script greps per-event "xdp event" lines
+level = "debug"
 format = "text"
 
 [pow]
 enabled = false
 EOF
 
-# Phase 3: origin server on the host half of the veth pair.
+# Phase 3: origin server inside the namespace, on loopback: a host firewall with
+# INPUT DROP (ufw) would otherwise cut the edge off from an origin on the host half.
 echo "<html><body>rampart-smoke-origin</body></html>" > "$WORK/index.html"
-python3 -m http.server "$ORIGIN_PORT" --bind "$HOST_IP" -d "$WORK" >/dev/null 2>&1 &
+ip netns exec "$NS" python3 -m http.server "$ORIGIN_PORT" --bind 127.0.0.1 -d "$WORK" >/dev/null 2>&1 &
 SRVPID=$!
 sleep 0.5
 
@@ -118,7 +120,7 @@ done
 if [ "$ATTACHED" = yes ]; then
     ok "XDP attached (verifier принят ядром $(uname -r))"
 else
-    fail "XDP не аттачнулся; лог:"; sed -n '1,30p' "$WORK/rampart.log"; exit 1
+    fail "XDP не аттачнулся; лог (начало и конец):"; sed -n '1,6p' "$WORK/rampart.log"; echo '...'; tail -20 "$WORK/rampart.log"; exit 1
 fi
 
 # Attach mode: native is expected on veth, but generic is a normal fallback in
@@ -155,15 +157,22 @@ BANS=$(ip netns exec "$NS" curl -s --max-time 2 "http://127.0.0.1:$METRICS_PORT/
     || fail "метрика autobans пуста"
 
 # A banned source is refused while the ban is active.
-HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 2 "http://$EDGE_IP:$EDGE_PORT/" || echo "err")
-[ "$HTTP_CODE" = "err" ] || [ "$HTTP_CODE" = "000" ] \
+HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 2 "http://$EDGE_IP:$EDGE_PORT/" || true)
+# curl prints 000 when the connection is refused or dropped.
+[ "${HTTP_CODE:-000}" = "000" ] \
     && ok "забаненный клиент отклонён (http=$HTTP_CODE)" \
     || fail "забаненный клиент получил ответ ($HTTP_CODE)"
 
-# Phase 7: expiry. After 7s (ban is 5s) traffic must come back on its own.
-sleep 7
-BODY=$(curl -s --max-time 5 "http://$EDGE_IP:$EDGE_PORT/" || true)
-echo "$BODY" | grep -q "rampart-smoke-origin" \
+# Phase 7: expiry. The in-kernel SYN ban lasts syn_ban_duration_ns (60 s, a
+# constant in XdpGlobals, not the userspace auto_ban_duration_secs), so poll
+# until traffic returns on its own instead of sleeping a fixed time.
+RECOVERED=no
+for _ in $(seq 16); do
+    sleep 5
+    BODY=$(curl -s --max-time 3 "http://$EDGE_IP:$EDGE_PORT/" || true)
+    echo "$BODY" | grep -q "rampart-smoke-origin" && { RECOVERED=yes; break; }
+done
+[ "$RECOVERED" = yes ] \
     && ok "бан истёк, легитимный трафик восстановлен" \
     || fail "после expiry трафик не восстановился"
 

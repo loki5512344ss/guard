@@ -77,6 +77,10 @@ struct conntrack_entry {
 struct throttle_entry {
     __u64 window_start;
     __u32 hits;
+    /* Explicit padding: the verifier rejects helper reads of uninitialised
+     * stack bytes, and implicit padding is not zeroed by the compiler. The
+     * struct size (16) is unchanged. */
+    __u32 pad;
 };
 
 /**

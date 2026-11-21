@@ -74,7 +74,25 @@ TCP-payload по `ip->tot_len`), VLAN/QinQ-теги и фрагменты — з
 проходить ни тегированным, ни фрагментированным.
 
 `scripts/xdp_netns_smoke.sh` дополнительно гоняет реальный бинарь `rampart` end-to-end
-(требует `hping3`).
+(требует `hping3`): `BIN=./target/release/rampart sudo -E bash scripts/xdp_netns_smoke.sh`.
+Origin поднимается внутри netns, поэтому хостовой файрвол (`ufw`, `INPUT DROP`) не мешает.
+Проверяет verifier, attach, проксирование, события ringbuf, auto-ban, истечение SYN-бана
+(60 с, поэтому прогон занимает ~1.5 минуты) и реальный detach после SIGTERM.
+
+Нагрузочный прогон в том же изолированном netns:
+
+```bash
+BIN=./target/release/rampart DURATION=20 SOURCES=single INTERVAL_US=200 sudo -E bash scripts/xdp_stress.sh
+SOURCES=random sudo -E ...   # спуфленные источники: защищает RST-challenge, а не throttle
+```
+
+Печатает pps, дропы XDP, RST-challenge, загрузку CPU и долю успешных запросов
+легитимного клиента во время флуда.
+
+Известные пробелы: `xdp_ipv6_smoke.sh` на ядре 5.15 не проходит (патч `.rodata` из
+bpftool и NDP в стенде); в режиме `SOURCES=random` живой клиент пока не проходит
+RST-challenge — это работа v0.5. Если `bpftool` на хосте — обёртка без пакета под
+текущее ядро (Ubuntu), подставьте реальный бинарь из `/usr/lib/linux-tools-*/`.
 
 Единая точка входа для CI появится в v0.4 (`scripts/xdp_ci.sh`, см.
 [roadmap/v0.4-xdp-ci-harness.md](roadmap/v0.4-xdp-ci-harness.md)); до этого

@@ -9,6 +9,7 @@
 
 ### Added
 
+- `scripts/xdp_stress.sh` — нагрузочный прогон SYN-флуда в netns (pps, дропы, CPU, живой клиент).
 - Anti-lockout: при старте edge предупреждает (`WARN`) о каждом активном SSH-клиенте, которого
   нет в `whitelist` (разбор `/proc/net/tcp{,6}`, без root).
 - Startup-диагностика XDP: детект контейнера (lxc/openvz/docker), единая строка окружения
@@ -30,6 +31,15 @@
 
 ### Fixed
 
+- **XDP: verifier на ядре 5.15 отвергал программу** (`invalid indirect read from stack`):
+  неявный паддинг `struct throttle_entry` не обнулялся clang 14 — теперь явное поле `pad`
+  (размер 16 и ABI прежние). Найдено прогоном на реальной KVM-ноде.
+- **XDP-программа оставалась на интерфейсе после остановки edge**: detach шёл в фоновом
+  потоке после 5-секундного sleep, процесс выходил раньше. Теперь detach синхронный в `run`.
+- Метрики `rampart_xdp_*` всегда были нулевыми: `stats_map` — `percpu_array`, читалась
+  обычным `lookup`. Теперь `lookup_percpu` с суммой по CPU.
+- `RUST_LOG` не мог поднять детализацию `rampart` выше `info` (принудительная директива
+  перебивала переменную окружения).
 - Docker edge image: в сборку добавлен `benches/`, без него Cargo не парсил
   манифест и образ не собирался (exit 101).
 - `rampart-cli status` подсказывал неверный бинарь (`rampart doctor` вместо
