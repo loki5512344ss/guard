@@ -9,7 +9,7 @@ pub use probe::{
 	AttachMode, EnvironmentReport, FilesystemProbe, KernelVersion, MIN_KERNEL, STAT_BLACKLIST, STAT_CHALLENGE_FAILED,
 	STAT_CHALLENGE_SENT, STAT_CHALLENGE_VERIFIED, STAT_DROP, STAT_FRAGMENT_BYPASS, STAT_PASS, STAT_RATE_LIMIT,
 	STAT_SYN_THROTTLE, STAT_TCP, STAT_TOTAL, STAT_UDP, STAT_WHITELIST, SystemProbe, XdpStats,
-	driver_supports_native_xdp,
+	driver_supports_native_xdp, sum_percpu_u64,
 };
 
 #[cfg(feature = "xdp")]
@@ -28,8 +28,8 @@ pub use filter::events::{
 };
 #[cfg(feature = "xdp")]
 pub use filter::{
-	XdpFilter, blacklist_key, blacklist6_key, interface_cstr, is_rodata_map, normalize_cidr, whitelist_key,
-	whitelist6_key, xdp_attach_mode_name,
+	XdpFilter, blacklist_key, blacklist6_key, canonical_cidr, interface_cstr, is_rodata_map, normalize_cidr,
+	whitelist_key, whitelist6_key, xdp_attach_mode_name,
 };
 
 #[cfg(feature = "xdp")]

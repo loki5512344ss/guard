@@ -42,6 +42,20 @@ pub const STAT_CHALLENGE_FAILED: u32 = 11;
 /// `STAT_FRAGMENT_BYPASS`: packets passed because their L4 header is unavailable (fragments).
 pub const STAT_FRAGMENT_BYPASS: u32 = 12;
 
+/// Sums a per-CPU `__u64` counter over every slot libbpf returned.
+///
+/// `lookup_percpu` yields one buffer per *possible* CPU (not per online CPU), so the
+/// CPU count is never assumed here. Counters wrap like the kernel's and a short
+/// trailing chunk (never produced for a `__u64` value) is ignored.
+#[must_use]
+pub fn sum_percpu_u64(slots: &[Vec<u8>]) -> u64 {
+	slots
+		.iter()
+		.flat_map(|slot| slot.chunks_exact(8))
+		.filter_map(|chunk| <[u8; 8]>::try_from(chunk).ok())
+		.fold(0u64, |acc, raw| acc.wrapping_add(u64::from_le_bytes(raw)))
+}
+
 /// XDP program counters; the indices follow `STAT_*` from `xdp/core/maps.h`.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct XdpStats {
@@ -74,11 +88,7 @@ impl XdpFilter {
 			// `stats_map` is a percpu_array: plain `lookup` does not support it and
 			// the failure would silently read as zero, so sum the per-CPU slots.
 			match map.lookup_percpu(&key, MapFlags::ANY) {
-				Ok(Some(slots)) => slots
-					.iter()
-					.flat_map(|slot| slot.chunks_exact(8))
-					.map(|c| u64::from_le_bytes(c.try_into().expect("chunk size 8")))
-					.sum(),
+				Ok(Some(slots)) => sum_percpu_u64(&slots),
 				_ => 0,
 			}
 		};

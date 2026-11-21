@@ -70,21 +70,22 @@ impl PrefixBans {
 	}
 }
 
+/// Bits an IPv4-mapped IPv6 address spends before its IPv4 part.
+const MAPPED_V4_BITS: u8 = 96;
+
 /// Converts `ip/prefix_len` into an inclusive address range.
 ///
-/// IPv4-mapped IPv6 addresses are normalised to IPv4 first, matching the prefix
-/// keys used by the subnet detector and the XDP prefix stats.
+/// IPv4-mapped IPv6 addresses with a prefix of at least 96 bits are folded into
+/// IPv4 (`::ffff:a.b.c.d/(96+n)` becomes `a.b.c.d/n`; `/96` is a rejected `/0`), matching the prefix keys of
+/// the subnet detector, the XDP prefix stats and the XDP ban tries. Shorter
+/// prefixes cover more than IPv4 space and stay IPv6 ranges.
 fn cidr_range(ip: IpAddr, prefix_len: u8) -> Option<(IpAddr, IpAddr)> {
-	let ip = match ip {
-		IpAddr::V6(v6) => v6.to_ipv4_mapped().map_or(ip, IpAddr::V4),
-		IpAddr::V4(_) => ip,
-	};
 	match ip {
 		IpAddr::V4(v4) => {
 			if prefix_len == 0 || prefix_len > 32 {
 				return None;
 			}
-			let mask = u32::MAX << (32 - prefix_len);
+			let mask = u32::MAX.checked_shl(32 - u32::from(prefix_len)).unwrap_or(0);
 			let base = u32::from(v4) & mask;
 			Some((
 				IpAddr::V4(Ipv4Addr::from(base)),
@@ -95,7 +96,12 @@ fn cidr_range(ip: IpAddr, prefix_len: u8) -> Option<(IpAddr, IpAddr)> {
 			if prefix_len == 0 || prefix_len > 128 {
 				return None;
 			}
-			let mask = u128::MAX << (128 - prefix_len);
+			if let Some(v4) = v6.to_ipv4_mapped()
+				&& prefix_len >= MAPPED_V4_BITS
+			{
+				return cidr_range(IpAddr::V4(v4), prefix_len - MAPPED_V4_BITS);
+			}
+			let mask = u128::MAX.checked_shl(128 - u32::from(prefix_len)).unwrap_or(0);
 			let base = u128::from(v6) & mask;
 			Some((
 				IpAddr::V6(Ipv6Addr::from(base)),

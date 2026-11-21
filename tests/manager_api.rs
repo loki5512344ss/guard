@@ -114,6 +114,9 @@ async fn blacklist_rejects_invalid_targets() {
 		"1.2.3.4/33",
 		"::1/129",
 		"1.2.3.4/+8",
+		"0.0.0.0/0",
+		"::/0",
+		"1.2.3.4/32",
 	] {
 		let body = format!(r#"{{"target":"{target}","type":"ip","reason":"manual_ban"}}"#);
 		let response = status(

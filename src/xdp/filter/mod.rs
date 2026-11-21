@@ -11,11 +11,13 @@ use attach::{attach_program, patch_rodata};
 use events::{AutoBanConfig, build_ringbuf};
 
 mod attach;
+mod cidr;
 pub(crate) mod events;
 mod maps;
 
 pub use attach::{interface_cstr, is_rodata_map, xdp_attach_mode_name};
-pub use maps::{blacklist_key, blacklist6_key, normalize_cidr, whitelist_key, whitelist6_key};
+pub use cidr::{canonical_cidr, normalize_cidr};
+pub use maps::{blacklist_key, blacklist6_key, whitelist_key, whitelist6_key};
 
 pub struct XdpFilter {
 	obj: Option<Object>,
