@@ -56,6 +56,7 @@ pub async fn run() -> anyhow::Result<RunExit> {
 		);
 	}
 	let whitelist = build_whitelist(&config)?;
+	super::lockout::warn_unlisted_ssh_clients(&whitelist);
 
 	let rate_limiter = Arc::new(RateLimiter::new(
 		config.limits.rate_limit_pps,

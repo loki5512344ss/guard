@@ -127,6 +127,20 @@ clang -O2 -g -target bpf -I"/usr/include/$(gcc -print-multiarch)" \
 # [xdp] enabled = false → systemctl restart rampart
 ```
 
+Edge при старте пишет строку `XDP environment: …`; ошибка attach содержит `hint:`
+(см. [troubleshooting](troubleshooting.md#xdp-не-загружается)). Её же показывает
+`rampart-cli doctor`.
+
+### Если нода заблокировала администратора
+
+При старте edge пишет `WARN active SSH client is not in whitelist` — добавьте адрес в
+`whitelist` до атаки. Если доступ уже потерян, зайдите через консоль провайдера (VNC/KVM):
+
+```bash
+ip link set dev eth0 xdp off       # снять XDP-программу с интерфейса
+systemctl stop rampart             # или [xdp] enabled = false и рестарт
+```
+
 ## 5. Клиенты не могут подключиться
 
 ```bash

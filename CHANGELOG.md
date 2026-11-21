@@ -9,6 +9,8 @@
 
 ### Added
 
+- Anti-lockout: при старте edge предупреждает (`WARN`) о каждом активном SSH-клиенте, которого
+  нет в `whitelist` (разбор `/proc/net/tcp{,6}`, без root).
 - Startup-диагностика XDP: детект контейнера (lxc/openvz/docker), единая строка окружения
   для edge и `rampart-cli doctor`, вердикт и `hint:` в ошибках load/attach.
 - `docs/architecture.md` — текущее устройство системы (процессы, путь трафика,
