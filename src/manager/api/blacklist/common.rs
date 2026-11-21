@@ -25,7 +25,6 @@ pub(super) const BLACKLIST_METADATA_KEY: &str = "rampart:blacklist:metadata";
 pub(super) const BLACKLIST_CHANNEL: &str = "rampart:blacklist:events";
 pub(super) const DEFAULT_BAN_DURATION_SECS: u64 = 300;
 pub(super) const LEGACY_BAN_DURATION_SECS: u64 = 300;
-pub(super) const MAX_BAN_DURATION_SECS: u64 = 31_536_000;
 /// Maximum accepted length of a ban reason, in bytes.
 pub(super) const MAX_REASON_BYTES: usize = 256;
 /// Batch size of SSCAN/HMGET/MGET calls on the blacklist.
@@ -70,20 +69,15 @@ pub(super) fn event_payload(
 /// syntactically valid but unsupported and is rejected with an explicit message
 /// instead of being stored as an entry the edges cannot apply.
 pub(super) fn validate_target(target: &str) -> Result<IpAddr, (StatusCode, Json<serde_json::Value>)> {
-	let target = target.trim();
-	if let Ok(ip) = target.parse::<IpAddr>() {
-		return Ok(ip);
-	}
-	if crate::manager::security::IpNet::parse(target).is_ok() {
+	let parsed =
+		crate::manager::input::parse_target(target).map_err(|message| api_error(StatusCode::BAD_REQUEST, &message))?;
+	if parsed.prefix.is_some() {
 		return Err(api_error(
 			StatusCode::BAD_REQUEST,
 			"CIDR targets are not supported; ban a single IP address",
 		));
 	}
-	Err(api_error(
-		StatusCode::BAD_REQUEST,
-		"target must be a valid IPv4 or IPv6 address",
-	))
+	Ok(parsed.ip)
 }
 
 /// Rejects a `reason` longer than [`MAX_REASON_BYTES`] bytes.

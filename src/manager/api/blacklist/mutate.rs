@@ -2,11 +2,11 @@
 
 use super::common::{
 	ADD_BAN_SCRIPT, BLACKLIST_CHANNEL, BLACKLIST_KEY, BLACKLIST_METADATA_KEY, DEFAULT_BAN_DURATION_SECS,
-	MAX_BAN_DURATION_SECS, REMOVE_BAN_SCRIPT, api_error, event_payload, redis_error, redis_unavailable,
-	validate_reason, validate_target,
+	REMOVE_BAN_SCRIPT, api_error, event_payload, redis_error, redis_unavailable, validate_reason, validate_target,
 };
 use super::{AddBlacklistRequest, RemoveBlacklistRequest};
 use crate::manager::AppState;
+use crate::manager::input::resolve_ban_window;
 use axum::{Json, extract::State, http::StatusCode};
 use std::sync::Arc;
 
@@ -22,25 +22,19 @@ pub async fn add_blacklist(
 			"only IP blacklist entries are supported",
 		));
 	}
-	let duration_secs = req.duration_secs.unwrap_or(DEFAULT_BAN_DURATION_SECS);
-	if duration_secs == 0 {
-		return Err(api_error(
-			StatusCode::BAD_REQUEST,
-			"duration_secs must be greater than zero",
-		));
-	}
-	if duration_secs > MAX_BAN_DURATION_SECS {
-		return Err(api_error(
-			StatusCode::BAD_REQUEST,
-			"duration_secs must not exceed one year",
-		));
-	}
+	let created_at_unix = crate::timeutil::unix_now();
+	let (duration_secs, expires_at_unix) = resolve_ban_window(
+		req.duration_secs,
+		req.expires_at,
+		DEFAULT_BAN_DURATION_SECS,
+		created_at_unix,
+	)
+	.map_err(|message| api_error(StatusCode::BAD_REQUEST, message))?;
 
 	let target = ip.to_string();
-	let created_at_unix = crate::timeutil::unix_now();
 	let metadata = super::common::BlacklistMetadata {
 		created_at_unix,
-		expires_at_unix: created_at_unix + duration_secs as i64,
+		expires_at_unix,
 		reason: req.reason.clone(),
 	};
 	let encoded_metadata = serde_json::to_string(&metadata)
@@ -69,7 +63,8 @@ pub async fn add_blacklist(
 		"status": "added",
 		"target": target,
 		"reason": req.reason,
-		"duration_secs": duration_secs
+		"duration_secs": duration_secs,
+		"expires_at": expires_at_unix
 	})))
 }
 
