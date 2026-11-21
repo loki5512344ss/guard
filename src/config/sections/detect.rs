@@ -89,48 +89,7 @@ pub struct ProtocolConfig {
 	pub http: HttpProtocolConfig,
 	#[cfg(feature = "protocol-minecraft")]
 	#[serde(default)]
-	pub minecraft: MinecraftProtocolConfig,
-}
-
-/// `[protocol.minecraft]` section: Minecraft handshake handler policy.
-#[cfg(feature = "protocol-minecraft")]
-#[derive(Debug, Clone, Deserialize)]
-pub struct MinecraftProtocolConfig {
-	#[serde(default = "default_minecraft_enabled")]
-	pub enabled: bool,
-	#[serde(default = "default_minecraft_max_frame_bytes")]
-	pub max_frame_bytes: usize,
-	#[serde(default = "default_minecraft_timeout_secs")]
-	pub timeout_secs: u64,
-	#[serde(default, alias = "proxy_protocol")]
-	pub send_proxy_protocol: bool,
-}
-
-#[cfg(feature = "protocol-minecraft")]
-impl Default for MinecraftProtocolConfig {
-	fn default() -> Self {
-		Self {
-			enabled: default_minecraft_enabled(),
-			max_frame_bytes: default_minecraft_max_frame_bytes(),
-			timeout_secs: default_minecraft_timeout_secs(),
-			send_proxy_protocol: false,
-		}
-	}
-}
-
-#[cfg(feature = "protocol-minecraft")]
-fn default_minecraft_enabled() -> bool {
-	!cfg!(feature = "protocol-http")
-}
-
-#[cfg(feature = "protocol-minecraft")]
-fn default_minecraft_max_frame_bytes() -> usize {
-	8192
-}
-
-#[cfg(feature = "protocol-minecraft")]
-fn default_minecraft_timeout_secs() -> u64 {
-	5
+	pub minecraft: super::minecraft::MinecraftProtocolConfig,
 }
 
 /// `[protocol.http]` section: HTTP/1.1 handler policy on the edge node.
