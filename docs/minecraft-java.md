@@ -42,6 +42,51 @@ text and is not part of the Minecraft protocol. Configure the edge firewall to
 allow public TCP `25565`, and keep Prometheus `9090` and the Paper backend port
 private.
 
+## Handshake hygiene
+
+Handshake и login-start идут открытым текстом, поэтому Rampart проверяет их до
+подключения к Paper. Любое нарушение — тихое закрытие соединения без ответа.
+Handler читает handshake и следующий за ним кадр (status request или login-start)
+и пересылает оба на backend байт-в-байт.
+
+Что отклоняется:
+
+- пустой или длиннее 255 символов hostname; hostname не UTF-8;
+- второй handshake, login-start до handshake, второй login-start;
+- `next_state` не из `{1, 2, 3}` (3 — transfer, обрабатывается как login);
+- неправдоподобный protocol id (меньше 4 или больше 65535, кроме снапшотов с битом 30);
+- версия вне `min_protocol_version`/`max_protocol_version` или из `deny_protocol_versions`;
+- ник длиной вне `1..=username_max_len` или с символами вне `username_charset`
+  (по умолчанию `A-Za-z0-9_.-`, длина до 16);
+- status request не равный пустому пакету `0x00`.
+
+Размер кадра проверяется сразу после декодирования VarInt длины, до чтения тела:
+handshake до `max_handshake_bytes` (2048), login-start до `max_login_start_bytes`
+(5120), status request до `max_status_request_bytes` (64); общий потолок —
+`max_frame_bytes`.
+
+```toml
+[protocol.minecraft]
+min_protocol_version = 47
+deny_protocol_versions = [340]
+username_max_len = 16
+username_charset = "standard"
+```
+
+Метрики (`/metrics`):
+
+- `rampart_mc_handshake_total{result,reason}` — `result` это `accepted` или `rejected`;
+  `reason` из закрытого набора: `ok`, `frame_length`, `frame_too_large`, `malformed`,
+  `unexpected_packet`, `empty_hostname`, `oversized_hostname`, `bad_hostname`,
+  `duplicate_handshake`, `login_before_handshake`, `duplicate_login_start`,
+  `bad_next_state`, `implausible_version`, `version_below_min`, `version_above_max`,
+  `version_denied`, `bad_username`, `bad_status_request`, `timeout`, `io`.
+- `rampart_mc_protocol_version_total{version}` — имя релиза из встроенной таблицы
+  (например `1.20.3-4`), всё остальное — `other`.
+
+Ограничения: второй login-start виден только если клиент прислал его сразу следом
+за первым; после ответа сервера трафик шифруется и не разбирается.
+
 ## Preserve player IPs safely
 
 When `send_proxy_protocol` is enabled, Rampart prepends a PROXY protocol v2 header

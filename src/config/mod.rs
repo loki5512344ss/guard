@@ -7,14 +7,14 @@ mod trusted;
 
 #[cfg(feature = "protocol-http")]
 pub use sections::HttpProtocolConfig;
-#[cfg(feature = "protocol-minecraft")]
-pub use sections::MinecraftProtocolConfig;
 #[cfg(any(feature = "protocol-http", feature = "protocol-minecraft"))]
 pub use sections::ProtocolConfig;
 pub use sections::{
 	BackendConfig, BanConfig, BindConfig, DetectAlertConfig, DetectAutobanConfig, DetectConfig, DetectPrefixConfig,
 	LimitsConfig, LoggingConfig, MetricsConfig, PowConfig, ProxyProtocolConfig, StoreConfig, WorkerConfig, XdpConfig,
 };
+#[cfg(feature = "protocol-minecraft")]
+pub use sections::{MinecraftProtocolConfig, UsernameCharset};
 pub use trusted::TrustedProxyCidr;
 
 use serde::Deserialize;
@@ -165,12 +165,7 @@ impl Config {
 			if self.backend.upstreams.len() != 1 {
 				anyhow::bail!("protocol.minecraft requires exactly one backend.upstreams entry");
 			}
-			if self.protocol.minecraft.max_frame_bytes == 0 {
-				anyhow::bail!("protocol.minecraft.max_frame_bytes must be positive");
-			}
-			if self.protocol.minecraft.timeout_secs == 0 {
-				anyhow::bail!("protocol.minecraft.timeout_secs must be positive");
-			}
+			self.protocol.minecraft.validate()?;
 		}
 		Ok(())
 	}

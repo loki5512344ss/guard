@@ -71,6 +71,26 @@ pub static INTEL_ALERTS_TOTAL: LazyLock<IntCounter> = LazyLock::new(|| {
 		.expect("INTEL_ALERTS_TOTAL")
 });
 
+/// Minecraft handshake outcomes; `reason` is a closed enum, never client input.
+pub static MC_HANDSHAKE_TOTAL: LazyLock<IntCounterVec> = LazyLock::new(|| {
+	register_int_counter_vec!(
+		"rampart_mc_handshake_total",
+		"Minecraft handshakes by result and closed reason",
+		&["result", "reason"]
+	)
+	.expect("MC_HANDSHAKE_TOTAL")
+});
+
+/// Minecraft protocol versions seen; label is a table name or `other`.
+pub static MC_PROTOCOL_VERSION_TOTAL: LazyLock<IntCounterVec> = LazyLock::new(|| {
+	register_int_counter_vec!(
+		"rampart_mc_protocol_version_total",
+		"Minecraft handshakes by known protocol version (unknown ids are other)",
+		&["version"]
+	)
+	.expect("MC_PROTOCOL_VERSION_TOTAL")
+});
+
 /// Serves the Prometheus registry over a minimal HTTP endpoint.
 ///
 /// Runs until the task is dropped; a failed connection is logged and never

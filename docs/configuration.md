@@ -185,6 +185,14 @@ enabled = true
 max_frame_bytes = 8192
 timeout_secs = 5
 send_proxy_protocol = false
+max_handshake_bytes = 2048
+max_login_start_bytes = 5120
+max_status_request_bytes = 64
+# min_protocol_version = 47
+# max_protocol_version = 772
+deny_protocol_versions = []
+username_max_len = 16
+username_charset = "standard"
 
 [logging]
 level = "info"
@@ -210,6 +218,14 @@ clickhouse_url = ""
 | `protocol.minecraft.max_frame_bytes` | `8192` | Лимит кадра; > 0 |
 | `protocol.minecraft.timeout_secs` | `5` | Таймаут handshake; > 0 |
 | `protocol.minecraft.send_proxy_protocol` | `false` | Отправлять PROXY v2 на Paper; alias — `proxy_protocol` |
+| `protocol.minecraft.max_handshake_bytes` | `2048` | Лимит кадра handshake (длина проверяется до буферизации); `16..=8192`, дополнительно ограничен `max_frame_bytes` |
+| `protocol.minecraft.max_login_start_bytes` | `5120` | Лимит кадра login-start; `16..=8192` |
+| `protocol.minecraft.max_status_request_bytes` | `64` | Лимит кадра status request; `1..=1024` |
+| `protocol.minecraft.min_protocol_version` | не задан | Нижняя граница protocol id; `>= 0`, не больше `max_protocol_version` |
+| `protocol.minecraft.max_protocol_version` | не задан | Верхняя граница protocol id; `>= 0` |
+| `protocol.minecraft.deny_protocol_versions` | `[]` | Запрещённые protocol id (например `340`); `>= 0` |
+| `protocol.minecraft.username_max_len` | `16` | Максимум символов в нике; `1..=64` |
+| `protocol.minecraft.username_charset` | `"standard"` | `standard` (`A-Za-z0-9_.-`), `ascii` (печатный ASCII без пробела) или `any` (UTF-8 без управляющих символов) |
 | `logging.level` | `info` | `trace`, `debug`, `info`, `warn`, `error` |
 | `logging.format` | `text` | `text` или `json` |
 | `metrics.enabled` | `true` | Prometheus endpoint |

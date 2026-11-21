@@ -1,94 +1,125 @@
-//! Bounded parser for the Minecraft Java handshake packet.
+//! Bounded parsers for the Minecraft Java handshake and login-start packets.
+//!
+//! Parsers take the frame body (packet id onward, without the length prefix) and
+//! never allocate based on client-declared lengths.
 
-const HANDSHAKE_PACKET_ID: i32 = 0;
+use super::policy::Policy;
+use super::reason::Reason;
+
 const MAX_VARINT_BYTES: usize = 5;
-const MAX_HOST_BYTES: usize = 255;
+const MAX_HOST_CHARS: usize = 255;
+/// A UTF-8 character takes at most four bytes.
+const MAX_UTF8_BYTES: usize = 4;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum NextState {
+pub enum NextState {
 	Status,
 	Login,
+	/// Protocol 766+ transfer intent; handled like login.
+	Transfer,
 }
 
-pub(super) fn decode_frame_length(prefix: &[u8]) -> anyhow::Result<(usize, usize)> {
-	let (length, bytes_read) = decode_varint(prefix, 0)?;
-	let length = usize::try_from(length).map_err(|_| anyhow::anyhow!("negative frame length"))?;
-	Ok((length, bytes_read))
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Handshake {
+	pub protocol_version: i32,
+	pub next_state: NextState,
 }
 
-/// Validates a complete length-prefixed handshake frame and returns its state.
-pub(super) fn parse_frame(frame: &[u8], max_frame_bytes: usize) -> anyhow::Result<NextState> {
-	let (frame_len, prefix_len) = decode_varint(frame, 0)?;
-	let frame_len = usize::try_from(frame_len).map_err(|_| anyhow::anyhow!("negative frame length"))?;
-	if frame_len == 0 || frame_len > max_frame_bytes {
-		anyhow::bail!("Minecraft handshake frame length {frame_len} is outside allowed range");
-	}
-	if frame.len() != prefix_len + frame_len {
-		anyhow::bail!("Minecraft handshake frame length does not match packet");
-	}
+/// Decodes the frame length prefix, returning `(length, prefix bytes)`.
+///
+/// # Errors
+/// Returns [`Reason::Malformed`] for an over-long or negative VarInt.
+pub fn decode_frame_length(prefix: &[u8]) -> Result<(usize, usize), Reason> {
+	let (length, read) = decode_varint(prefix, 0)?;
+	let length = usize::try_from(length).map_err(|_| Reason::Malformed)?;
+	Ok((length, read))
+}
 
-	let body = &frame[prefix_len..];
-	let (packet_id, mut cursor) = decode_varint(body, 0)?;
-	if packet_id != HANDSHAKE_PACKET_ID {
-		anyhow::bail!("unexpected Minecraft packet id {packet_id} in handshake state");
+/// Parses a handshake body. Independent of the protocol version.
+///
+/// # Errors
+/// Returns the [`Reason`] for the first structural violation.
+pub fn parse_handshake(body: &[u8]) -> Result<Handshake, Reason> {
+	let (packet_id, cursor) = decode_varint(body, 0)?;
+	if packet_id != 0 {
+		return Err(Reason::UnexpectedPacket);
 	}
-
-	let (protocol_version, next) = decode_varint(body, cursor)?;
+	let (protocol_version, cursor) = decode_varint(body, cursor)?;
 	if protocol_version < 0 {
-		anyhow::bail!("Minecraft protocol version must be non-negative");
+		return Err(Reason::ImplausibleVersion);
 	}
-	cursor = next;
-
-	let (host_len, next) = decode_varint(body, cursor)?;
-	let host_len = usize::try_from(host_len).map_err(|_| anyhow::anyhow!("negative host length"))?;
-	if host_len == 0 || host_len > MAX_HOST_BYTES {
-		anyhow::bail!("Minecraft handshake hostname length is outside allowed range");
+	let (host_len, cursor) = decode_varint(body, cursor)?;
+	let host_len = usize::try_from(host_len).map_err(|_| Reason::OversizedHostname)?;
+	if host_len == 0 {
+		return Err(Reason::EmptyHostname);
 	}
-	cursor = next;
-	let host_end = cursor
-		.checked_add(host_len)
-		.ok_or_else(|| anyhow::anyhow!("hostname length overflow"))?;
-	let host_bytes = body
-		.get(cursor..host_end)
-		.ok_or_else(|| anyhow::anyhow!("truncated Minecraft handshake hostname"))?;
-	std::str::from_utf8(host_bytes).map_err(|_| anyhow::anyhow!("Minecraft handshake hostname is not UTF-8"))?;
-	cursor = host_end;
-
-	let port_end = cursor
-		.checked_add(2)
-		.ok_or_else(|| anyhow::anyhow!("port length overflow"))?;
-	if body.get(cursor..port_end).is_none() {
-		anyhow::bail!("truncated Minecraft handshake port");
+	if host_len > MAX_HOST_CHARS * MAX_UTF8_BYTES {
+		return Err(Reason::OversizedHostname);
 	}
-	cursor = port_end;
-
-	let (state, next) = decode_varint(body, cursor)?;
-	cursor = next;
+	let host_end = cursor.checked_add(host_len).ok_or(Reason::Malformed)?;
+	let host = body.get(cursor..host_end).ok_or(Reason::Malformed)?;
+	let host = std::str::from_utf8(host).map_err(|_| Reason::BadHostname)?;
+	if host.chars().count() > MAX_HOST_CHARS {
+		return Err(Reason::OversizedHostname);
+	}
+	let port_end = host_end.checked_add(2).ok_or(Reason::Malformed)?;
+	if body.get(host_end..port_end).is_none() {
+		return Err(Reason::Malformed);
+	}
+	let (state, cursor) = decode_varint(body, port_end)?;
 	if cursor != body.len() {
-		anyhow::bail!("unexpected trailing bytes in Minecraft handshake");
+		return Err(Reason::Malformed);
 	}
-
-	match state {
-		1 => Ok(NextState::Status),
-		2 => Ok(NextState::Login),
-		_ => anyhow::bail!("unsupported Minecraft next state {state}; expected status or login"),
-	}
+	let next_state = match state {
+		1 => NextState::Status,
+		2 => NextState::Login,
+		3 => NextState::Transfer,
+		_ => return Err(Reason::BadNextState),
+	};
+	Ok(Handshake {
+		protocol_version,
+		next_state,
+	})
 }
 
-/// Decodes signed Minecraft VarInt from a packet, returning value and next offset.
-fn decode_varint(bytes: &[u8], start: usize) -> anyhow::Result<(i32, usize)> {
+/// Parses a login-start body and validates the username.
+///
+/// Bytes after the name (UUID, signature data) differ per protocol version and
+/// are bounded only by the frame cap.
+///
+/// # Errors
+/// Returns the [`Reason`] for the first violation.
+pub fn parse_login_start(body: &[u8], policy: &Policy) -> Result<(), Reason> {
+	let (packet_id, cursor) = decode_varint(body, 0)?;
+	if packet_id != 0 {
+		return Err(Reason::UnexpectedPacket);
+	}
+	let (name_len, cursor) = decode_varint(body, cursor)?;
+	let name_len = usize::try_from(name_len).map_err(|_| Reason::BadUsername)?;
+	if name_len == 0 || name_len > policy.username_max_len * MAX_UTF8_BYTES {
+		return Err(Reason::BadUsername);
+	}
+	let end = cursor.checked_add(name_len).ok_or(Reason::Malformed)?;
+	let name = body.get(cursor..end).ok_or(Reason::Malformed)?;
+	let name = std::str::from_utf8(name).map_err(|_| Reason::BadUsername)?;
+	policy.check_username(name)
+}
+
+/// Decodes a signed Minecraft VarInt, returning the value and the next offset.
+///
+/// # Errors
+/// Returns [`Reason::Malformed`] when truncated or longer than 32 bits.
+pub fn decode_varint(bytes: &[u8], start: usize) -> Result<(i32, usize), Reason> {
 	let mut value = 0u32;
 	for index in 0..MAX_VARINT_BYTES {
-		let byte = *bytes
-			.get(start + index)
-			.ok_or_else(|| anyhow::anyhow!("truncated Minecraft VarInt"))?;
+		let byte = *bytes.get(start + index).ok_or(Reason::Malformed)?;
 		if index == 4 && byte & 0xf0 != 0 {
-			anyhow::bail!("Minecraft VarInt exceeds 32 bits");
+			return Err(Reason::Malformed);
 		}
 		value |= u32::from(byte & 0x7f) << (index * 7);
 		if byte & 0x80 == 0 {
 			return Ok((value as i32, start + index + 1));
 		}
 	}
-	anyhow::bail!("Minecraft VarInt exceeds five bytes")
+	Err(Reason::Malformed)
 }
