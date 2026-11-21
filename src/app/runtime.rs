@@ -14,7 +14,6 @@ use crate::traffic::hook::TrafficHook;
 use crate::traffic::intel::detector::{AttackDetector, AttackStatus};
 use crate::traffic::intel::reputation::IpReputation;
 use crate::traffic::profile::alert::{AlertDispatcher, send_webhook};
-use crate::xdp::XdpFilter;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -23,7 +22,7 @@ use tokio::sync::oneshot;
 use tokio::sync::watch;
 use tracing_subscriber::EnvFilter;
 
-use super::services::{build_registry, build_whitelist, start_subnet_tracker, start_xdp};
+use super::services::{build_registry, build_whitelist, detach_xdp, start_subnet_tracker, start_xdp};
 use super::shutdown::{RunExit, spawn_shutdown_drain};
 
 fn attack_status_value(status: AttackStatus) -> i64 {
@@ -229,22 +228,6 @@ pub async fn run() -> anyhow::Result<RunExit> {
 	};
 	detach_xdp(xdp_for_shutdown.as_ref());
 	exit
-}
-
-/// Detaches the XDP program before the process exits, so a stopped edge never
-/// leaves a filter dropping traffic with nobody reading its events.
-fn detach_xdp(xdp: Option<&Arc<Mutex<XdpFilter>>>) {
-	let Some(xdp) = xdp else {
-		return;
-	};
-	match xdp.lock() {
-		Ok(mut guard) => {
-			if let Err(e) = guard.unload() {
-				tracing::error!(error = %e, "XDP detach on shutdown failed; run `ip link set dev <if> xdp off`");
-			}
-		},
-		Err(_) => tracing::error!("XDP lock poisoned on shutdown; run `ip link set dev <if> xdp off`"),
-	}
 }
 
 async fn push_attack_event(writer: &Option<Arc<tokio::sync::Mutex<ClickHouseWriter>>>, pps: f64) {

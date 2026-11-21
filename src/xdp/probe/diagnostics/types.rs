@@ -5,7 +5,12 @@ pub const MIN_KERNEL: KernelVersion = KernelVersion::new(5, 15, 0);
 
 pub(super) const OSRELEASE_PATH: &str = "/proc/sys/kernel/osrelease";
 pub(super) const BTF_PATH: &str = "/sys/kernel/btf/vmlinux";
-const STATUS_PATH: &str = "/proc/self/status";
+pub(super) const STATUS_PATH: &str = "/proc/self/status";
+
+const CAP_NET_ADMIN: u32 = 12;
+const CAP_SYS_ADMIN: u32 = 21;
+const CAP_PERFMON: u32 = 38;
+const CAP_BPF: u32 = 39;
 
 pub(super) const SYSTEMD_CONTAINER_PATH: &str = "/run/systemd/container";
 const OPENVZ_PATH: &str = "/proc/vz";
@@ -182,4 +187,18 @@ pub(super) fn driver_from_link(target: &str) -> Option<String> {
 #[must_use]
 pub fn driver_supports_native_xdp(driver: &str) -> bool {
 	NATIVE_XDP_DRIVERS.contains(&driver)
+}
+
+/// Effective capability mask (`CapEff`) from `/proc/self/status`.
+pub(super) fn parse_cap_eff(status: &str) -> Option<u64> {
+	status
+		.lines()
+		.find_map(|line| u64::from_str_radix(line.strip_prefix("CapEff:")?.trim(), 16).ok())
+}
+
+/// Whether the mask allows loading and attaching XDP: `CAP_NET_ADMIN` plus
+/// `CAP_BPF`+`CAP_PERFMON` (kernel 5.8+) or the legacy `CAP_SYS_ADMIN`.
+pub(super) fn caps_allow_xdp(mask: u64) -> bool {
+	let has = |bit: u32| mask & (1 << bit) != 0;
+	has(CAP_NET_ADMIN) && ((has(CAP_BPF) && has(CAP_PERFMON)) || has(CAP_SYS_ADMIN))
 }

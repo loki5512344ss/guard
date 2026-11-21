@@ -45,9 +45,9 @@
 
 | Задача | Приоритет | Статус | План |
 |--------|-----------|--------|------|
-| XDP netns+veth harness в CI | P0 | in-progress | [v0.4-xdp-ci-harness.md](v0.4-xdp-ci-harness.md) |
-| Startup-диагностика окружения | P1 | in-progress | [v0.4-startup-diagnostics.md](v0.4-startup-diagnostics.md) |
-| Anti-lockout и баны по порту | P1 | in-progress | [v0.4-anti-lockout.md](v0.4-anti-lockout.md) |
+| XDP netns+veth harness в CI | P0 | done | [v0.4-xdp-ci-harness.md](v0.4-xdp-ci-harness.md) |
+| Startup-диагностика окружения | P1 | done | [v0.4-startup-diagnostics.md](v0.4-startup-diagnostics.md) |
+| Anti-lockout и баны по порту | P1 | done | [v0.4-anti-lockout.md](v0.4-anti-lockout.md) |
 
 ## 5. v0.5 — продуктовые фичи
 

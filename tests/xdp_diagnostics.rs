@@ -188,3 +188,39 @@ fn failure_hint_covers_privileges_and_btf() {
 	no_btf.files.remove("/sys/kernel/btf/vmlinux");
 	assert!(no_btf.collect().failure_hint().contains("BTF"));
 }
+
+fn with_cap_eff(probe: &mut MockProbe, mask: &str) {
+	probe.files.insert(
+		"/proc/self/status".to_owned(),
+		format!("Uid:\t0\t0\t0\t0\nCapEff:\t{mask}\n"),
+	);
+}
+
+#[test]
+fn root_without_bpf_capabilities_is_not_privileged() {
+	// Docker's default capability set: uid 0, but no CAP_NET_ADMIN / CAP_BPF.
+	let mut probe = MockProbe::linux("virtio_net", "6.8.0");
+	with_cap_eff(&mut probe, "00000000a80425fb");
+	let report = probe.collect();
+	assert!(!report.privileged, "uid 0 without CAP_BPF must not count as privileged");
+	assert!(report.warnings.join("\n").contains("CAP_BPF"));
+	assert!(report.failure_hint().contains("--cap-add"));
+}
+
+#[test]
+fn full_xdp_capability_set_is_privileged() {
+	// CAP_NET_ADMIN (12) + CAP_PERFMON (38) + CAP_BPF (39).
+	let mut modern = MockProbe::linux("virtio_net", "6.8.0");
+	with_cap_eff(&mut modern, "000000c000001000");
+	assert!(modern.collect().privileged);
+
+	// Legacy: CAP_NET_ADMIN (12) + CAP_SYS_ADMIN (21).
+	let mut legacy = MockProbe::linux("virtio_net", "5.15.0");
+	with_cap_eff(&mut legacy, "0000000000201000");
+	assert!(legacy.collect().privileged);
+
+	// CAP_BPF alone, without CAP_NET_ADMIN, cannot attach.
+	let mut partial = MockProbe::linux("virtio_net", "6.8.0");
+	with_cap_eff(&mut partial, "000000c000000000");
+	assert!(!partial.collect().privileged);
+}

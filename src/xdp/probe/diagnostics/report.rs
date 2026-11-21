@@ -1,8 +1,8 @@
 use anyhow::{Result, bail};
 
 use super::types::{
-	AttachMode, BTF_PATH, KernelVersion, MIN_KERNEL, OSRELEASE_PATH, SystemProbe, container_blocks_xdp,
-	detect_container, driver_from_link, driver_supports_native_xdp,
+	AttachMode, BTF_PATH, KernelVersion, MIN_KERNEL, OSRELEASE_PATH, STATUS_PATH, SystemProbe, caps_allow_xdp,
+	container_blocks_xdp, detect_container, driver_from_link, driver_supports_native_xdp, parse_cap_eff,
 };
 
 /// Structured report on how suitable the environment is for XDP.
@@ -25,7 +25,10 @@ impl EnvironmentReport {
 			.ok()
 			.and_then(|r| KernelVersion::parse(r.trim()));
 		let btf_available = probe.path_exists(BTF_PATH);
-		let privileged = probe.effective_uid() == 0;
+		// Capabilities decide, not the uid: root in a container without CAP_BPF still
+		// cannot attach. Without a readable CapEff the uid heuristic remains.
+		let cap_eff = probe.read_file(STATUS_PATH).ok().and_then(|s| parse_cap_eff(&s));
+		let privileged = cap_eff.map_or_else(|| probe.effective_uid() == 0, caps_allow_xdp);
 		let driver_link = probe.symlink_target(&format!("/sys/class/net/{interface}/device/driver"));
 		let driver_name = driver_link.as_deref().and_then(driver_from_link);
 
@@ -40,8 +43,8 @@ impl EnvironmentReport {
 		}
 		if !privileged {
 			warnings.push(
-				"процесс не от root: CAP_BPF/CAP_NET_ADMIN не подтверждены, \
-                 attach скорее всего завершится EPERM"
+				"нет прав на XDP (нужны CAP_NET_ADMIN + CAP_BPF + CAP_PERFMON или root без урезанных \
+                 capabilities): attach скорее всего завершится EPERM"
 					.to_owned(),
 			);
 		}
@@ -90,7 +93,12 @@ impl EnvironmentReport {
 			),
 			(
 				"privileges",
-				if self.privileged { "root" } else { "non-root" }.to_owned(),
+				if self.privileged {
+					"xdp-capable"
+				} else {
+					"missing-xdp-caps"
+				}
+				.to_owned(),
 			),
 			(
 				"driver",
@@ -118,7 +126,7 @@ impl EnvironmentReport {
 			return format!("контейнер '{kind}' не поддерживает XDP: нужна KVM-VDS или bare metal");
 		}
 		if !self.privileged {
-			return "запустите от root или выдайте CAP_BPF, CAP_NET_ADMIN, CAP_PERFMON".to_owned();
+			return "выдайте процессу CAP_NET_ADMIN, CAP_BPF и CAP_PERFMON (docker: --cap-add) или запустите от root без урезанных capabilities".to_owned();
 		}
 		if !self.btf_available {
 			return "ядро без BTF (/sys/kernel/btf/vmlinux): используйте ядро с CONFIG_DEBUG_INFO_BTF=y".to_owned();

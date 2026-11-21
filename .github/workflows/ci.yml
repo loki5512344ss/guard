@@ -96,3 +96,25 @@ jobs:
           file: deploy/docker/Dockerfile.edge
           load: true
           tags: rampart/edge:ci
+
+  xdp-kernel:
+    name: XDP — netns smoke on a real kernel
+    runs-on: ubuntu-24.04
+    needs: [rust-check]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: sudo apt-get update && sudo apt-get install -y libelf-dev zlib1g-dev libbpf-dev clang linux-libc-dev hping3 iproute2 curl python3
+      # bpftool for the running (Azure) kernel may not be packaged; xdp_ci.sh also
+      # looks for any real binary under /usr/lib/linux-tools*.
+      - run: sudo apt-get install -y linux-tools-common linux-tools-generic || true
+      # Built as the normal user: `sudo` resets PATH, so the script must not build.
+      - run: cargo build --release --features xdp,protocol-http --bin rampart
+      - name: XDP — pkt + smoke (SKIP is reported, never counted as a pass)
+        run: |
+          set -o pipefail
+          BIN="$PWD/target/release/rampart" bash scripts/xdp_ci.sh --ci | tee xdp_ci.log
+          if grep -q '^RESULT xdp_ci SKIP' xdp_ci.log; then
+            echo "::warning title=XDP harness skipped::$(grep '^SKIP:' xdp_ci.log)"
+          fi

@@ -5,8 +5,10 @@
 //! [`Blacklist::clear_expired`]. Deadlines are monotonic and clamped, so a
 //! hostile expiry can never overflow or panic.
 
+mod port;
 mod prefix;
 
+use self::port::PortBans;
 use self::prefix::PrefixBans;
 use dashmap::DashMap;
 use std::collections::HashSet;
@@ -39,6 +41,7 @@ pub struct Blacklist {
 	entries: Arc<DashMap<IpAddr, BanEntry>>,
 	redis_entries: Arc<DashMap<IpAddr, BanEntry>>,
 	prefixes: PrefixBans,
+	ports: PortBans,
 	local_ban_events: broadcast::Sender<LocalBanEvent>,
 }
 
@@ -56,6 +59,7 @@ impl Blacklist {
 			entries: Arc::new(DashMap::new()),
 			redis_entries: Arc::new(DashMap::new()),
 			prefixes: PrefixBans::new(),
+			ports: PortBans::new(),
 			local_ban_events,
 		}
 	}
@@ -170,7 +174,7 @@ impl Blacklist {
 
 	/// Total number of tracked bans.
 	pub fn len(&self) -> usize {
-		self.entries.len() + self.redis_entries.len() + self.prefixes.len()
+		self.entries.len() + self.redis_entries.len() + self.prefixes.len() + self.ports.len()
 	}
 
 	/// Returns whether all ban tables are empty.
@@ -184,6 +188,7 @@ impl Blacklist {
 		self.entries.retain(|_, entry| entry.expires > now);
 		self.redis_entries.retain(|_, entry| entry.expires > now);
 		self.prefixes.clear_expired(now);
+		self.ports.clear_expired(now);
 	}
 
 	/// Checks `entries`, lazily removing `ip` only if it is still expired.

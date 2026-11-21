@@ -192,3 +192,19 @@ pub fn build_whitelist(config: &Config) -> anyhow::Result<Arc<HashSet<IpAddr>>> 
 	}
 	Ok(Arc::new(set))
 }
+
+/// Detaches the XDP program before the process exits, so a stopped edge never
+/// leaves a filter dropping traffic with nobody reading its events.
+pub(crate) fn detach_xdp(xdp: Option<&Arc<Mutex<XdpFilter>>>) {
+	let Some(xdp) = xdp else {
+		return;
+	};
+	match xdp.lock() {
+		Ok(mut guard) => {
+			if let Err(e) = guard.unload() {
+				tracing::error!(error = %e, "XDP detach on shutdown failed; run `ip link set dev <if> xdp off`");
+			}
+		},
+		Err(_) => tracing::error!("XDP lock poisoned on shutdown; run `ip link set dev <if> xdp off`"),
+	}
+}

@@ -9,6 +9,13 @@
 
 ### Added
 
+- `scripts/xdp_ci.sh` — единая точка входа XDP-проверок на реальном ядре (`RESULT … PASS|FAIL|SKIP`,
+  честный SKIP без прав/инструментов, `--require`), CI-job `xdp-kernel`. Smoke получил фазу
+  recovery (`ip link set dev <if> xdp off` после `kill -9`).
+- Баны по порту: `Blacklist::add_port` / `is_blocked_on` (userspace, локально для узла, XDP-ABI
+  не менялся); gateway проверяет бан с учётом локального порта соединения.
+- Диагностика XDP определяет права по `CapEff`, а не по uid: root в контейнере без
+  CAP_BPF/CAP_NET_ADMIN больше не считается «privileged», hint подсказывает `--cap-add`.
 - `scripts/xdp_stress.sh` — нагрузочный прогон SYN-флуда в netns (pps, дропы, CPU, живой клиент).
 - Anti-lockout: при старте edge предупреждает (`WARN`) о каждом активном SSH-клиенте, которого
   нет в `whitelist` (разбор `/proc/net/tcp{,6}`, без root).

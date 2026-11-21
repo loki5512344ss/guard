@@ -11,7 +11,8 @@ privileges=… driver=… expected_mode=…` — её же печатает `ram
 (общий код `EnvironmentReport::summary_fields`). `expected_mode` — предсказание по
 таблице драйверов; реальный режим логируется после attach (`native (drv)` или
 `generic (skb)`). Ошибка attach содержит вердикт и `hint:` с рекомендацией
-(контейнер lxc/openvz → нужна KVM-VDS; не root → CAP_BPF/CAP_NET_ADMIN; нет BTF → ядро с
+(контейнер lxc/openvz → нужна KVM-VDS; нет CAP_NET_ADMIN/CAP_BPF/CAP_PERFMON — даже у root в
+контейнере, `privileges=missing-xdp-caps` → `docker run --cap-add …`; нет BTF → ядро с
 `CONFIG_DEBUG_INFO_BTF=y`).
 
 ```bash

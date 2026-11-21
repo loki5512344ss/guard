@@ -94,9 +94,12 @@ bpftool и NDP в стенде); в режиме `SOURCES=random` живой к�
 RST-challenge — это работа v0.5. Если `bpftool` на хосте — обёртка без пакета под
 текущее ядро (Ubuntu), подставьте реальный бинарь из `/usr/lib/linux-tools-*/`.
 
-Единая точка входа для CI появится в v0.4 (`scripts/xdp_ci.sh`, см.
-[roadmap/v0.4-xdp-ci-harness.md](roadmap/v0.4-xdp-ci-harness.md)); до этого
-скрипты выше запускаются вручную.
+Единая точка входа: `sudo -E bash scripts/xdp_ci.sh` (`BIN=…` — пропустить сборку,
+`--require` — SKIP считать ошибкой, `--with-ipv6` — добавить `xdp_ipv6_smoke.sh`). Скрипт
+печатает строки `RESULT <фаза> PASS|FAIL|SKIP`; без root, netns, ядра ≥ 5.10 или рабочего
+`bpftool` он честно пишет `SKIP: <причина>`, а не зелёный результат. В CI это job
+`xdp-kernel`; SKIP превращается в `::warning`. Проверено: возврат бага с паддингом
+`throttle_entry` роняет прогон (`invalid indirect read from stack`, exit 1).
 
 ---
 

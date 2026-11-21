@@ -14,15 +14,15 @@
 | Версия | `0.3.0-dev` |
 | Milestone | **v0.4 — надёжность и воспроизводимость** |
 | CI | зелёный: fmt, clippy, тесты, deny, Docker, module-size, secrets, docs-links |
-| Следующий релиз | v0.4 после закрытия трёх задач ниже |
+| Следующий релиз | v0.4: все три задачи закрыты; остался первый прогон job `xdp-kernel` на GitHub |
 
 ## 2. Активные задачи (v0.4)
 
 | Задача | Приоритет | Статус | План |
 |--------|-----------|--------|------|
-| XDP netns+veth harness в CI | P0 | in-progress | [v0.4-xdp-ci-harness.md](docs/roadmap/v0.4-xdp-ci-harness.md) |
-| Startup-диагностика окружения | P1 | in-progress | [v0.4-startup-diagnostics.md](docs/roadmap/v0.4-startup-diagnostics.md) |
-| Anti-lockout и баны по порту | P1 | in-progress | [v0.4-anti-lockout.md](docs/roadmap/v0.4-anti-lockout.md) |
+| XDP netns+veth harness в CI | P0 | done | [v0.4-xdp-ci-harness.md](docs/roadmap/v0.4-xdp-ci-harness.md) |
+| Startup-диагностика окружения | P1 | done | [v0.4-startup-diagnostics.md](docs/roadmap/v0.4-startup-diagnostics.md) |
+| Anti-lockout и баны по порту | P1 | done | [v0.4-anti-lockout.md](docs/roadmap/v0.4-anti-lockout.md) |
 
 Статусы и правила ведутся в [docs/roadmap/README.md](docs/roadmap/README.md);
 при изменении статуса правятся оба места (файл задачи и эта таблица).

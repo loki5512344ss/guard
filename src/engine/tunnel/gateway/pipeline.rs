@@ -28,7 +28,8 @@ impl Gateway {
 		// blacklist entries and XDP/Redis bans propagate across all nodes, so a
 		// whitelisted address must never enter that path.
 		if !trusted {
-			if self.blacklist.is_blocked(peer_ip) {
+			let local_port = client.local_addr().map_or(0, |addr| addr.port());
+			if self.blacklist.is_blocked_on(peer_ip, local_port) {
 				metrics::CONNECTIONS_TOTAL.with_label_values(&["blocked"]).inc();
 				return Ok(());
 			}

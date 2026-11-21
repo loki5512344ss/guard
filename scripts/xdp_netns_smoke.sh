@@ -191,6 +191,26 @@ else
     ok "XDP-программа реально отвязана после SIGTERM"
 fi
 
+# Phase 9: the runbook recovery procedure (docs/runbook.md, "Если нода
+# заблокировала администратора"). A crashed edge leaves the program on the NIC;
+# `ip link set dev <if> xdp off` must remove it without the daemon.
+RAMPART_CONFIG="$WORK/edge.toml" ip netns exec "$NS" "$BIN" > "$WORK/rampart2.log" 2>&1 &
+RAMPID=$!
+for _ in $(seq 40); do
+    grep -q "XDP filter attached" "$WORK/rampart2.log" && break
+    sleep 0.5
+done
+kill -9 "$RAMPID" 2>/dev/null; wait "$RAMPID" 2>/dev/null; RAMPID=""
+if ip -n "$NS" link show rtap | grep -q "xdp"; then
+    ok "после kill -9 программа осталась на интерфейсе (ожидаемо)"
+    ip -n "$NS" link set dev rtap xdp off
+    ip -n "$NS" link show rtap | grep -q "xdp" \
+        && fail "recovery: 'ip link set dev rtap xdp off' не снял программу" \
+        || ok "recovery: 'ip link set dev <if> xdp off' снимает программу без демона"
+else
+    fail "после kill -9 программы нет на интерфейсе: нечего восстанавливать (проверка бессмысленна)"
+fi
+
 # Summary: exit code drives CI, the log excerpt makes a failure diagnosable.
 echo
 if [ "$PASS" = 1 ]; then
