@@ -72,31 +72,10 @@ fn print_network_section(all_ok: &mut bool) {
 		println!("[WARN] Default route interface not found, XDP checks skipped");
 		return;
 	};
-	println!("Interface: {interface}");
-
 	let report = EnvironmentReport::collect(&probe, &interface);
-	let kernel = report
-		.kernel_version
-		.map_or_else(|| "unknown".to_owned(), |v| v.to_string());
-	println!("Kernel: {kernel}");
-	println!(
-		"BTF: {}",
-		if report.btf_available {
-			"available"
-		} else {
-			"missing (CO-RE disabled)"
-		}
-	);
-	println!(
-		"Privileges: {}",
-		if report.privileged {
-			"root (capabilities assumed)"
-		} else {
-			"non-root"
-		}
-	);
-	println!("Driver: {}", report.driver_name.as_deref().unwrap_or("unknown"));
-	println!("Attach mode: {}", report.attach_mode());
+	for (label, value) in report.summary_fields(&interface) {
+		println!("{label}: {value}");
+	}
 	println!("Verdict: {}", report.verdict());
 	for warning in &report.warnings {
 		println!("[WARN] {warning}");
@@ -106,6 +85,7 @@ fn print_network_section(all_ok: &mut bool) {
 		*all_ok = false;
 	} else {
 		println!("[OK] XDP environment");
+		println!("hint if attach fails: {}", report.failure_hint());
 	}
 }
 

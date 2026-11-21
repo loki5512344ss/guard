@@ -21,7 +21,7 @@
 | Задача | Приоритет | Статус | План |
 |--------|-----------|--------|------|
 | XDP netns+veth harness в CI | P0 | planned | [v0.4-xdp-ci-harness.md](docs/roadmap/v0.4-xdp-ci-harness.md) |
-| Startup-диагностика окружения | P1 | planned | [v0.4-startup-diagnostics.md](docs/roadmap/v0.4-startup-diagnostics.md) |
+| Startup-диагностика окружения | P1 | in-progress | [v0.4-startup-diagnostics.md](docs/roadmap/v0.4-startup-diagnostics.md) |
 | Anti-lockout и баны по порту | P1 | planned | [v0.4-anti-lockout.md](docs/roadmap/v0.4-anti-lockout.md) |
 
 Статусы и правила ведутся в [docs/roadmap/README.md](docs/roadmap/README.md);

@@ -74,7 +74,7 @@ impl XdpFilter {
 	/// attach failure no program is left installed.
 	pub fn load(&mut self) -> Result<()> {
 		// Diagnostics before loading: fail fast on an unsupported kernel or driver.
-		super::probe::preflight(&self.interface)?;
+		let report = super::probe::preflight(&self.interface)?;
 
 		let bpf_obj = include_bytes!(concat!(env!("OUT_DIR"), "/universal_filter.o"));
 		// The object name is set explicitly: with `open_memory` libbpf does not know the
@@ -86,7 +86,12 @@ impl XdpFilter {
 			.open_memory(bpf_obj)
 			.context("Failed to open XDP object")?;
 		patch_rodata(&mut open_obj, &self.globals)?;
-		let obj = open_obj.load().context("Failed to load XDP object (verifier error?)")?;
+		let obj = open_obj.load().with_context(|| {
+			format!(
+				"Failed to load XDP object (verifier error?); hint: {}",
+				report.failure_hint()
+			)
+		})?;
 
 		let c_interface = interface_cstr(&self.interface)?;
 		// SAFETY: `c_interface` is a valid, NUL-terminated C string and is kept
@@ -103,7 +108,14 @@ impl XdpFilter {
 		super::metrics::init();
 		let rbuf = build_ringbuf(&obj, self.blacklist.clone(), self.autoban)?;
 
-		let (attach_flags, mode, guard) = attach_program(&obj, ifindex as i32, &self.interface)?;
+		let (attach_flags, mode, guard) = attach_program(&obj, ifindex as i32, &self.interface).with_context(|| {
+			format!(
+				"XDP attach to '{}' failed ({}); hint: {}",
+				self.interface,
+				report.verdict(),
+				report.failure_hint()
+			)
+		})?;
 		guard.disarm();
 
 		self.obj = Some(obj);

@@ -9,6 +9,8 @@
 
 ### Added
 
+- Startup-диагностика XDP: детект контейнера (lxc/openvz/docker), единая строка окружения
+  для edge и `rampart-cli doctor`, вердикт и `hint:` в ошибках load/attach.
 - `docs/architecture.md` — текущее устройство системы (процессы, путь трафика,
   слои, хранилища, метрики).
 - `docs/development.md` — принципы, лимиты, гейты, Definition of Done.

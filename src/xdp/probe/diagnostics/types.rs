@@ -7,6 +7,36 @@ pub(super) const OSRELEASE_PATH: &str = "/proc/sys/kernel/osrelease";
 pub(super) const BTF_PATH: &str = "/sys/kernel/btf/vmlinux";
 const STATUS_PATH: &str = "/proc/self/status";
 
+pub(super) const SYSTEMD_CONTAINER_PATH: &str = "/run/systemd/container";
+const OPENVZ_PATH: &str = "/proc/vz";
+const OPENVZ_HOST_PATH: &str = "/proc/bc";
+const DOCKERENV_PATH: &str = "/.dockerenv";
+
+/// Detects the container/virtualization layer the process runs in, if it is a container.
+///
+/// Returns the systemd container id (`lxc`, `docker`, ...) or `openvz`. Full VMs (KVM,
+/// VMware) are not reported: for XDP they only matter through the NIC driver.
+pub(super) fn detect_container(probe: &dyn SystemProbe) -> Option<String> {
+	if let Ok(raw) = probe.read_file(SYSTEMD_CONTAINER_PATH) {
+		let id = raw.trim();
+		if !id.is_empty() {
+			return Some(id.to_owned());
+		}
+	}
+	// `/proc/vz` without `/proc/bc` is the guest side of OpenVZ/Virtuozzo.
+	if probe.path_exists(OPENVZ_PATH) && !probe.path_exists(OPENVZ_HOST_PATH) {
+		return Some("openvz".to_owned());
+	}
+	probe.path_exists(DOCKERENV_PATH).then(|| "docker".to_owned())
+}
+
+/// Whether the container kind is known to block BPF/XDP attach (shared host kernel
+/// without BPF privileges for the guest).
+#[must_use]
+pub fn container_blocks_xdp(kind: &str) -> bool {
+	matches!(kind, "openvz" | "lxc" | "lxc-libvirt")
+}
+
 /// Drivers with known native XDP support (from the upstream kernel's native/generic
 /// matrices). Absence from this list does not mean support is missing, but for such
 /// drivers generic mode is predicted.

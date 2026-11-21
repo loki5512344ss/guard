@@ -6,6 +6,14 @@
 
 ### "XDP не загружается"
 
+При старте edge пишет одну строку `XDP environment: interface=… kernel=… virt=… btf=…
+privileges=… driver=… expected_mode=…` — её же печатает `rampart-cli doctor`
+(общий код `EnvironmentReport::summary_fields`). `expected_mode` — предсказание по
+таблице драйверов; реальный режим логируется после attach (`native (drv)` или
+`generic (skb)`). Ошибка attach содержит вердикт и `hint:` с рекомендацией
+(контейнер lxc/openvz → нужна KVM-VDS; не root → CAP_BPF/CAP_NET_ADMIN; нет BTF → ядро с
+`CONFIG_DEBUG_INFO_BTF=y`).
+
 ```bash
 systemd-detect-virt   # openvz/lxc → XDP не работает, нужен KVM
 uname -r              # нужно 5.10+

@@ -132,3 +132,59 @@ fn warns_when_not_privileged_and_btf_missing() {
 	assert!(joined.contains("CAP_BPF"), "must warn about capabilities: {joined}");
 	assert!(joined.contains("CO-RE"), "must warn about missing BTF: {joined}");
 }
+
+#[test]
+fn lxc_container_gets_reason_and_recommendation() {
+	let mut probe = MockProbe::linux("virtio_net", "6.8.0");
+	probe
+		.files
+		.insert("/run/systemd/container".to_owned(), "lxc\n".to_owned());
+
+	let report = probe.collect();
+	assert_eq!(report.container.as_deref(), Some("lxc"));
+	let joined = report.warnings.join("\n");
+	assert!(joined.contains("'lxc'"), "must name the container: {joined}");
+	assert!(joined.contains("KVM"), "must recommend a KVM VDS: {joined}");
+	assert!(report.failure_hint().contains("KVM"));
+}
+
+#[test]
+fn openvz_guest_is_detected_but_host_is_not() {
+	let mut guest = MockProbe::linux("virtio_net", "6.8.0");
+	guest.files.insert("/proc/vz".to_owned(), String::new());
+	assert_eq!(guest.collect().container.as_deref(), Some("openvz"));
+
+	let mut host = MockProbe::linux("virtio_net", "6.8.0");
+	host.files.insert("/proc/vz".to_owned(), String::new());
+	host.files.insert("/proc/bc".to_owned(), String::new());
+	assert_eq!(host.collect().container, None);
+}
+
+#[test]
+fn docker_is_reported_without_blocking_warning() {
+	let mut probe = MockProbe::linux("virtio_net", "6.8.0");
+	probe.files.insert("/.dockerenv".to_owned(), String::new());
+	let report = probe.collect();
+	assert_eq!(report.container.as_deref(), Some("docker"));
+	assert!(!report.warnings.join("\n").contains("контейнера"));
+}
+
+#[test]
+fn summary_fields_spell_generic_as_skb() {
+	let report = MockProbe::linux("r8169", "6.8.0").collect();
+	let fields = report.summary_fields("eth0");
+	let mode = fields.iter().find(|(k, _)| *k == "expected_mode").expect("mode field");
+	assert_eq!(mode.1, "generic (skb)");
+	assert!(fields.iter().any(|(k, v)| *k == "driver" && v == "r8169"));
+}
+
+#[test]
+fn failure_hint_covers_privileges_and_btf() {
+	let mut probe = MockProbe::linux("virtio_net", "6.8.0");
+	probe.uid = 1000;
+	assert!(probe.collect().failure_hint().contains("CAP_BPF"));
+
+	let mut no_btf = MockProbe::linux("virtio_net", "6.8.0");
+	no_btf.files.remove("/sys/kernel/btf/vmlinux");
+	assert!(no_btf.collect().failure_hint().contains("BTF"));
+}
