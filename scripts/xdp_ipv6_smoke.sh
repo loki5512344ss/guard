@@ -56,10 +56,10 @@ ok "clang: universal_filter.c собран"
 ip netns add "$NS" || { echo "не удалось создать netns"; exit 2; }
 ip link add "$DEV0" type veth peer name "$DEV1" || exit 2
 ip link set "$DEV1" netns "$NS"
-ip -6 addr add "$HOST6/64" dev "$DEV0"
+ip -6 addr add "$HOST6/64" dev "$DEV0" nodad
 ip addr add "$HOST4/24" dev "$DEV0"
 ip link set "$DEV0" up
-ip -n "$NS" -6 addr add "$NS6/64" dev "$DEV1"
+ip -n "$NS" -6 addr add "$NS6/64" dev "$DEV1" nodad
 ip -n "$NS" addr add "$NS4/24" dev "$DEV1"
 ip -n "$NS" link set "$DEV1" up
 ip -n "$NS" link set lo up
@@ -138,6 +138,10 @@ ns = time.clock_gettime_ns(time.CLOCK_MONOTONIC) + $1 * 1_000_000_000
 print(' '.join(f'{b:02x}' for b in ns.to_bytes(8, 'little')))
 "
 }
+
+# Without nodad above the addresses stay tentative for ~2 s (DAD) and the first
+# datagrams never leave; also resolve the neighbour once before measuring.
+send6 1 >/dev/null 2>&1; sleep 0.5
 
 # Phase 1: IPv6 — traffic passes, a ban drops it, removing the ban restores it.
 pass0=$(metric pass)
@@ -221,11 +225,13 @@ drop3=$(metric drop); pass3=$(metric pass)
 # Policy is a .rodata global and libbpf freezes .rodata after load, so the
 # object section is patched before loading. The offsets are pinned by the
 # _Static_asserts in xdp/core/config.h: udp_policy @49, udp_hit_count @52.
+# Ubuntu ships only versioned names (llvm-objcopy-14); take whatever exists.
+OBJCOPY=$(command -v llvm-objcopy || ls /usr/bin/llvm-objcopy-* /usr/lib/llvm-*/bin/llvm-objcopy 2>/dev/null | sort -V | tail -1)
 POBJ="$OBJ.rl"
 cp "$OBJ" "$POBJ"
-if llvm-objcopy --dump-section .rodata="$POBJ.rodata" "$POBJ" \
+if [ -n "$OBJCOPY" ] && "$OBJCOPY" --dump-section .rodata="$POBJ.rodata" "$POBJ" \
 	&& python3 - "$POBJ.rodata" <<'PY' \
-	&& llvm-objcopy --update-section .rodata="$POBJ.rodata" "$POBJ"
+	&& "$OBJCOPY" --update-section .rodata="$POBJ.rodata" "$POBJ"
 import sys
 path = sys.argv[1]
 img = bytearray(open(path, "rb").read())

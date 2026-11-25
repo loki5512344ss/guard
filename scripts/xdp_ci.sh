@@ -9,7 +9,7 @@
 #   pkt    scripts/xdp_pkt_test.sh      VLAN/QinQ, fragments, Ethernet padding
 #   smoke  scripts/xdp_netns_smoke.sh   verifier, attach, proxy, ban, expiry, detach
 #   chal   scripts/xdp_challenge_test.sh RST-challenge: live client behind conntrack, spoof, forged RST
-#   ipv6   scripts/xdp_ipv6_smoke.sh    opt-in via --with-ipv6 (known gaps, see docs/testing.md)
+#   ipv6   scripts/xdp_ipv6_smoke.sh    v6/v4 bans, whitelist, expiry, UDP rate-limit (skip: --no-ipv6)
 #
 # Exit codes: 0 all passed (or honestly skipped), 1 a phase failed,
 #             2 usage, 3 skipped while --require was given.
@@ -19,13 +19,14 @@
 set -u
 
 REQUIRE=0
-WITH_IPV6=0
+WITH_IPV6=1
 for arg in "$@"; do
     case "$arg" in
         --require) REQUIRE=1 ;;
-        --with-ipv6) WITH_IPV6=1 ;;
+        --with-ipv6) WITH_IPV6=1 ;; # default since v0.5, kept for old call sites
+        --no-ipv6) WITH_IPV6=0 ;;
         --ci) ;; # accepted for CI call sites: output is always CI-friendly
-        *) echo "usage: $0 [--require] [--with-ipv6] [--ci]"; exit 2 ;;
+        *) echo "usage: $0 [--require] [--no-ipv6] [--ci]"; exit 2 ;;
     esac
 done
 

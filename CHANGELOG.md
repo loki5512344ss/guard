@@ -66,6 +66,9 @@
 
 ### Fixed
 
+- `xdp_ipv6_smoke.sh` падал на ядре 5.15: адреса без `nodad` оставались tentative и первые
+  датаграммы терялись; `llvm-objcopy` на Ubuntu есть только как `llvm-objcopy-NN`. Фаза `ipv6`
+  теперь входит в `xdp_ci.sh` по умолчанию (`--no-ipv6` — пропустить), в CI ставится `llvm`.
 - XDP RST-challenge не пропускал живых клиентов за stateful-фаерволом (`ufw`, NAT-роутер,
   любой conntrack с `ct state invalid drop`): ack challenge-SYN-ACK брался из всего 32-битного
   пространства, conntrack клиента помечал такой SYN-ACK как INVALID и выбрасывал до TCP-стека.
