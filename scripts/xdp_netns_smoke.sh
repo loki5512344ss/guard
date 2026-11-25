@@ -78,6 +78,7 @@ protected_port_start = $EDGE_PORT
 protected_port_end = $EDGE_PORT
 events_enabled = true
 throttle_enabled = true
+syn_ban_duration_secs = 8
 auto_ban_enabled = true
 auto_ban_duration_secs = 5
 auto_ban_conn_drop_fails = 3
@@ -163,18 +164,25 @@ HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 2 "http://$EDGE_IP
     && ok "забаненный клиент отклонён (http=$HTTP_CODE)" \
     || fail "забаненный клиент получил ответ ($HTTP_CODE)"
 
-# Phase 7: expiry. The in-kernel SYN ban lasts syn_ban_duration_ns (60 s, a
-# constant in XdpGlobals, not the userspace auto_ban_duration_secs), so poll
-# until traffic returns on its own instead of sleeping a fixed time.
+# Phase 7: expiry. The in-kernel SYN ban lasts [xdp] syn_ban_duration_secs (8 s
+# here, 60 s by default; not the userspace auto_ban_duration_secs). Poll until
+# traffic returns, and fail if it took as long as the default: that would mean
+# the config value never reached the kernel.
 RECOVERED=no
-for _ in $(seq 16); do
-    sleep 5
+BAN_T0=$SECONDS
+for _ in $(seq 40); do
+    sleep 2
     BODY=$(curl -s --max-time 3 "http://$EDGE_IP:$EDGE_PORT/" || true)
     echo "$BODY" | grep -q "rampart-smoke-origin" && { RECOVERED=yes; break; }
 done
-[ "$RECOVERED" = yes ] \
-    && ok "бан истёк, легитимный трафик восстановлен" \
-    || fail "после expiry трафик не восстановился"
+BAN_WAIT=$((SECONDS - BAN_T0))
+if [ "$RECOVERED" = yes ] && [ "$BAN_WAIT" -le 30 ]; then
+    ok "бан истёк за ~${BAN_WAIT}s (syn_ban_duration_secs = 8), трафик восстановлен"
+elif [ "$RECOVERED" = yes ]; then
+    fail "бан истёк только через ${BAN_WAIT}s: syn_ban_duration_secs не дошёл до ядра"
+else
+    fail "после expiry трафик не восстановился"
+fi
 
 # Phase 8: graceful stop must leave no program behind (regression on
 # borrow_raw(-1) during detach).

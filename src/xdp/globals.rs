@@ -48,6 +48,10 @@ pub const UDP_POLICY_DROP: u8 = 1;
 /// `G_UDP_POLICY` value: rate-limit per window/threshold.
 pub const UDP_POLICY_RATE_LIMIT: u8 = 2;
 
+/// Upper bound for `xdp.syn_ban_duration_secs`: one day. Longer bans belong in
+/// the managed blacklist, where they are visible and can be lifted.
+pub const MAX_SYN_BAN_DURATION_SECS: u64 = 86_400;
+
 /// Default placeholder for `G_CHALLENGE_SECRET` from config.h.
 const DEFAULT_CHALLENGE_SECRET: u64 = 0xA5A5_A5A5_A5A5_A5A5;
 
@@ -149,7 +153,8 @@ impl XdpGlobals {
 	///
 	/// # Errors
 	/// Unknown `udp_policy` value; malformed `challenge_secret_hex` (not hex, or not
-	/// 8 bytes); `protected_port_end < protected_port_start`.
+	/// 8 bytes); `protected_port_end < protected_port_start`; `syn_ban_duration_secs`
+	/// outside `1..=MAX_SYN_BAN_DURATION_SECS`.
 	pub fn from_config(cfg: &XdpConfig) -> Result<Self> {
 		let mut g = Self {
 			start_port: cfg.protected_port_start,
@@ -157,6 +162,7 @@ impl XdpGlobals {
 			udp_hit_count: cfg.udp_rate_hit_count,
 			udp_window_ns: cfg.udp_rate_window_ms.saturating_mul(1_000_000),
 			feature_syn_throttle: cfg.throttle_enabled,
+			syn_ban_duration_ns: cfg.syn_ban_duration_secs.saturating_mul(1_000_000_000),
 			feature_events: cfg.events_enabled,
 			syn_challenge_enabled: cfg.syn_challenge_enabled,
 			challenge_timeout_ms: cfg.challenge_timeout_ms,
@@ -167,6 +173,12 @@ impl XdpGlobals {
 				"xdp.protected_port_end ({}) < xdp.protected_port_start ({})",
 				g.end_port,
 				g.start_port
+			);
+		}
+		if !(1..=MAX_SYN_BAN_DURATION_SECS).contains(&cfg.syn_ban_duration_secs) {
+			bail!(
+				"xdp.syn_ban_duration_secs ({}) must be between 1 and {MAX_SYN_BAN_DURATION_SECS}",
+				cfg.syn_ban_duration_secs
 			);
 		}
 		g.udp_policy = match cfg.udp_policy.as_str() {

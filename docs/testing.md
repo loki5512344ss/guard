@@ -77,7 +77,8 @@ TCP-payload по `ip->tot_len`), VLAN/QinQ-теги и фрагменты — з
 (требует `hping3`): `BIN=./target/release/rampart sudo -E bash scripts/xdp_netns_smoke.sh`.
 Origin поднимается внутри netns, поэтому хостовой файрвол (`ufw`, `INPUT DROP`) не мешает.
 Проверяет verifier, attach, проксирование, события ringbuf, auto-ban, истечение SYN-бана
-(60 с, поэтому прогон занимает ~1.5 минуты) и реальный detach после SIGTERM.
+(`syn_ban_duration_secs = 8`; дольше 30 с — FAIL, значит значение не дошло до ядра) и
+реальный detach после SIGTERM.
 
 Нагрузочный прогон в том же изолированном netns:
 
@@ -96,12 +97,13 @@ veth отдаёт кадры `XDP_TX` пиру только если на пир
 challenge-тест и `xdp_stress.sh` вешают на клиентский конец pass-программу (нужен `clang`);
 на реальной NIC это не требуется.
 
-Известные пробелы: `xdp_ipv6_smoke.sh` на ядре 5.15 не проходит (патч `.rodata` из
-bpftool и NDP в стенде). Если `bpftool` на хосте — обёртка без пакета под
+`xdp_ipv6_smoke.sh` поднимает адреса с `nodad` (иначе первые датаграммы теряются, пока идёт
+DAD) и ищет `llvm-objcopy` в том числе под версионным именем (`llvm-objcopy-14` на Ubuntu).
+Если `bpftool` на хосте — обёртка без пакета под
 текущее ядро (Ubuntu), подставьте реальный бинарь из `/usr/lib/linux-tools-*/`.
 
-Единая точка входа: `sudo -E bash scripts/xdp_ci.sh` (фазы `pkt`, `smoke`, `chal`; `BIN=…` — пропустить сборку,
-`--require` — SKIP считать ошибкой, `--with-ipv6` — добавить `xdp_ipv6_smoke.sh`). Скрипт
+Единая точка входа: `sudo -E bash scripts/xdp_ci.sh` (фазы `pkt`, `smoke`, `chal`, `ipv6`; `BIN=…` — пропустить сборку,
+`--require` — SKIP считать ошибкой, `--no-ipv6` — пропустить `xdp_ipv6_smoke.sh`). Скрипт
 печатает строки `RESULT <фаза> PASS|FAIL|SKIP`; без root, netns, ядра ≥ 5.10 или рабочего
 `bpftool` он честно пишет `SKIP: <причина>`, а не зелёный результат. В CI это job
 `xdp-kernel`; SKIP превращается в `::warning`. Проверено: возврат бага с паддингом

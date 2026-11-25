@@ -64,11 +64,13 @@ syn_challenge_enabled = true
 challenge_secret_hex = "0011223344556677"
 challenge_timeout_ms = 7000
 throttle_enabled = false
+syn_ban_duration_secs = 15
 events_enabled = false
 "#,
 	)
 	.expect("[xdp] section must parse");
 	let g = XdpGlobals::from_config(&cfg.xdp).expect("globals must build");
+	assert_eq!(g.syn_ban_duration_ns, 15_000_000_000);
 	assert_eq!(g.start_port, 25560);
 	assert_eq!(g.end_port, 25600);
 	assert_eq!(g.udp_policy, 2);
@@ -115,4 +117,19 @@ fn xdp_section_defaults_match_config_h() {
 	let cfg = Config::parse_str("").expect("empty config parses");
 	let g = XdpGlobals::from_config(&cfg.xdp).expect("globals must build");
 	assert_eq!(g, XdpGlobals::default());
+}
+
+#[test]
+fn syn_ban_duration_defaults_to_config_h_value() {
+	let cfg = Config::parse_str("[xdp]\n").expect("[xdp] section must parse");
+	let g = XdpGlobals::from_config(&cfg.xdp).expect("globals must build");
+	assert_eq!(g.syn_ban_duration_ns, XdpGlobals::default().syn_ban_duration_ns);
+}
+
+#[test]
+fn syn_ban_duration_out_of_range_is_rejected() {
+	for bad in ["0", "86401"] {
+		let cfg = Config::parse_str(&format!("[xdp]\nsyn_ban_duration_secs = {bad}\n")).expect("must parse");
+		assert!(XdpGlobals::from_config(&cfg.xdp).is_err(), "{bad}");
+	}
 }

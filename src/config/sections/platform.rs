@@ -45,7 +45,7 @@ pub struct XdpConfig {
 	pub udp_rate_window_ms: u64,
 	#[serde(default)]
 	pub syn_challenge_enabled: bool,
-	/// 128-bit hex (16 characters) for `G_CHALLENGE_SECRET`; `None` keeps the
+	/// 64-bit secret as 16 hex characters for `G_CHALLENGE_SECRET`; `None` keeps the
 	/// placeholder from `config.h`.
 	#[serde(default)]
 	pub challenge_secret_hex: Option<String>,
@@ -53,6 +53,10 @@ pub struct XdpConfig {
 	pub challenge_timeout_ms: u32,
 	#[serde(default = "default_xdp_throttle_enabled")]
 	pub throttle_enabled: bool,
+	/// In-kernel ban applied by the SYN throttle, in seconds
+	/// (`G_SYN_BAN_DURATION_NS`). Independent of `auto_ban_duration_secs`.
+	#[serde(default = "default_xdp_syn_ban_duration_secs")]
+	pub syn_ban_duration_secs: u64,
 	#[serde(default = "default_xdp_events_enabled")]
 	pub events_enabled: bool,
 	/// Opt-in auto-ban driven by XDP ringbuf events. Disabled by default (secure
@@ -82,6 +86,7 @@ impl Default for XdpConfig {
 			challenge_secret_hex: None,
 			challenge_timeout_ms: default_xdp_challenge_timeout_ms(),
 			throttle_enabled: default_xdp_throttle_enabled(),
+			syn_ban_duration_secs: default_xdp_syn_ban_duration_secs(),
 			events_enabled: default_xdp_events_enabled(),
 			auto_ban_enabled: false,
 			auto_ban_duration_secs: default_xdp_auto_ban_duration_secs(),
@@ -113,6 +118,9 @@ fn default_xdp_challenge_timeout_ms() -> u32 {
 }
 fn default_xdp_throttle_enabled() -> bool {
 	true
+}
+fn default_xdp_syn_ban_duration_secs() -> u64 {
+	60
 }
 fn default_xdp_events_enabled() -> bool {
 	true

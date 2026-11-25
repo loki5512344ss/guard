@@ -18,6 +18,9 @@
   `xdp_challenge_test.sh` проверяет v6: живой клиент за ip6tables INVALID DROP, спуф, forged RST.
 - Документация: матрица «протокол → PoW / RST-challenge» в configuration.md, раздел про
   challenge и его метрики в runbook. Ошибка `pow.enabled` + Minecraft подсказывает RST-challenge.
+- `[xdp] syn_ban_duration_secs` (по умолчанию 60, `1..=86400`): длительность бана в ядре при
+  срабатывании SYN-throttle; раньше была зашита в `XdpGlobals` и конфигом не читалась.
+  Смоук ставит 8 с и проверяет, что значение дошло до ядра (прогон короче на ~минуту).
 - Minecraft: строгий автомат handshake→login/status (дубли handshake/login-start, login до
   handshake, плохой hostname/next_state/версия/ник → тихое закрытие); лимиты кадра по фазе до
   буферизации (handshake 2048, login-start 5120, status request 64, настраиваются в
