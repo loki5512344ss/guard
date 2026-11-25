@@ -36,7 +36,8 @@ default = ["store-redis"]
 store-redis = ["dep:redis"]
 geoip = ["dep:maxminddb"]
 xdp = ["dep:libbpf-rs", "dep:libc"]
-io-uring = ["dep:tokio-splice"]
+# Placeholder for the v0.6 io_uring runtime research; enables nothing yet.
+io-uring = []
 # HTTP/1.1 protocol handler: request-head parsing, Allow/Reject verdict,
 # upstream tunnelling (see src/protocol/http/ and [protocol.http] in the config).
 protocol-http = []
@@ -73,7 +74,6 @@ jsonwebtoken = { version = "11", features = ["aws_lc_rs"] }
 
 redis = { version = "1.7", optional = true, features = ["tokio-comp", "connection-manager"] }
 maxminddb = { version = "0.32", optional = true }
-tokio-splice = { version = "0.2", optional = true }
 libbpf-rs = { version = "0.27", optional = true }
 libc = { version = "0.2", optional = true }
 
