@@ -96,6 +96,7 @@ udp_policy = "pass"
 udp_rate_hit_count = 100
 udp_rate_window_ms = 1000
 throttle_enabled = true
+syn_ban_duration_secs = 60
 events_enabled = true
 auto_ban_enabled = false
 auto_ban_duration_secs = 60
@@ -113,12 +114,13 @@ challenge_timeout_ms = 3000
 | `udp_policy` | `pass` | `pass`, `drop` или `rate-limit` (окно по source-IP) |
 | `udp_rate_hit_count` / `udp_rate_window_ms` | `100` / `1000` | Порог и окно для `rate-limit` |
 | `throttle_enabled` | `true` | SYN-throttle и авто-бан по `connection_throttle` (IPv4) |
+| `syn_ban_duration_secs` | `60` | Бан в ядре при срабатывании SYN-throttle, `1..=86400`; не путать с `auto_ban_duration_secs` (userspace) |
 | `events_enabled` | `true` | Ringbuf-события в userspace (IPv4) |
 | `auto_ban_enabled` | `false` | OPT-IN: баны по событиям ringbuf |
 | `auto_ban_duration_secs` | `60` | Длительность авто-бана |
 | `auto_ban_conn_drop_fails` | `3` | Порог `conn->fails` для бана по `EVENT_CONN_DROP` |
-| `syn_challenge_enabled` | `false` | RST-challenge (Oubliette-style liveness proof), IPv4 |
-| `challenge_secret_hex` | — | 128-битный hex-секрет (`openssl rand -hex 8`); placeholder запрещён |
+| `syn_challenge_enabled` | `false` | RST-challenge (Oubliette-style liveness proof), IPv4 и IPv6 |
+| `challenge_secret_hex` | — | 64-битный секрет, 16 hex-символов (`openssl rand -hex 8`); placeholder запрещён |
 | `challenge_timeout_ms` | `3000` | TTL pending-challenge |
 
 Поведение фильтра:
@@ -141,8 +143,21 @@ challenge_timeout_ms = 3000
 - **IPv4**: blacklist, SYN-throttle, conntrack, RST-challenge, ringbuf-события,
   `udp_policy` (включая `rate-limit`), prefix-статистика.
 - **IPv6**: blacklist, whitelist, `udp_policy` (включая `rate-limit` с 128-битным
-  ключом), детект TCP-bypass, prefix-статистика. Пока нет: conntrack,
-  SYN-throttle, RST-challenge, ringbuf-события и unban — для v6 только счётчики.
+  ключом), детект TCP-bypass, RST-challenge (128-битные ключи), prefix-статистика.
+  Пока нет: conntrack, SYN-throttle, ringbuf-события и unban — для v6 только счётчики.
+
+Какую проверку источника включать:
+
+| Протокол | PoW (`[pow]`) | RST-challenge (`[xdp] syn_challenge_enabled`) |
+|----------|---------------|-----------------------------------------------|
+| HTTP | да | да; можно вместе с PoW |
+| Minecraft Java | нет — конфиг отклоняется | да, единственный вариант |
+| Любой другой TCP | нет (клиент не ответит на текстовый challenge) | да |
+
+RST-challenge не трогает payload: живой TCP-стек проходит его сам, приложение видит лишь
+задержку ~10–20 мс на первом connect с адреса (verified держится 5 минут скользящим окном).
+SYN с IPv4-опциями или за IPv6 extension-заголовками при включённом challenge дропается:
+ответ собирается как голый заголовок.
 
 ### 1.4 Детекция и алерты
 

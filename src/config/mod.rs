@@ -160,7 +160,10 @@ impl Config {
 		#[cfg(feature = "protocol-minecraft")]
 		if self.protocol.minecraft.enabled {
 			if self.pow.enabled {
-				anyhow::bail!("pow.enabled is incompatible with protocol.minecraft");
+				anyhow::bail!(
+					"pow.enabled is incompatible with protocol.minecraft (the client cannot answer a \
+					 text challenge); use xdp.syn_challenge_enabled for liveness checks instead"
+				);
 			}
 			if self.backend.upstreams.len() != 1 {
 				anyhow::bail!("protocol.minecraft requires exactly one backend.upstreams entry");

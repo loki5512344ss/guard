@@ -453,10 +453,36 @@ int rampart_universal_filter(struct xdp_md *ctx)
             inc_drop();
             return XDP_DROP;
         }
+        struct tcphdr *tcp6 = (struct tcphdr *)l4;
+
+        // RST challenge for native IPv6, same contract as IPv4.
+        if (G_SYN_CHALLENGE_ENABLED &&
+            ((tcp6->syn && !tcp6->ack) || tcp6->rst)) {
+            struct ipv6hdr *ip6 = l3;
+            struct flow_key6 flow6 = {
+                .src_port = tcp6->source,
+                .dst_port = tcp6->dest,
+            };
+            __builtin_memcpy(flow6.src, src6, 16);
+            __builtin_memcpy(flow6.dst, &ip6->daddr, 16);
+            int cv;
+            if (tcp6->rst) {
+                cv = chal6_on_rst(tcp6, &flow6, now);
+            } else if (v6_ext_len != 0) {
+                // The reply is rebuilt as a bare 40+20-byte packet, so a SYN
+                // behind extension headers cannot be answered. Drop (counted).
+                inc_drop();
+                return XDP_DROP;
+            } else {
+                cv = chal6_on_syn(ctx, eth, ip6, tcp6, &flow6, now);
+            }
+            if (cv != CHAL_CONTINUE)
+                return cv;
+        }
+
         // Per-prefix stats (/64) — feeds the subnet detector for IPv6
         struct prefix_key pkey6;
         prefix_key_from_v6(&pkey6, src6);
-        struct tcphdr *tcp6 = (struct tcphdr *)l4;
         __u32 v6_id;
         __builtin_memcpy(&v6_id, src6 + 12, 4); // interface ID differs per host
         update_prefix_stats(&pkey6, (tcp6->syn && !tcp6->ack) ? 1 : 0, now, v6_id);
@@ -592,7 +618,9 @@ int rampart_universal_filter(struct xdp_md *ctx)
             // The challenge reply is rebuilt as a bare 20-byte IPv4 header,
             // so an IPv4 SYN with options cannot be answered without shipping
             // a malformed SYN-ACK. Drop it (counted) instead.
-            if (!is_ipv6 && ((struct iphdr *)l3)->ihl != 5) {
+            // Same for IPv4-mapped IPv6 behind extension headers.
+            if ((!is_ipv6 && ((struct iphdr *)l3)->ihl != 5) ||
+                (is_ipv6 && v6_ext_len != 0)) {
                 inc_drop();
                 return XDP_DROP;
             }

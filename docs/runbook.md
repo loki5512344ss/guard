@@ -44,8 +44,13 @@ rampart-cli blacklist list    # показывает оставшееся вре
 # C) Доверенные IP (мониторинг, админы) → whitelist в config.toml
 #    (только IP-адреса), затем systemctl restart rampart
 
-# D) Для Minecraft Java PoW не включай: он несовместим с протоколом.
-#    Проверь фильтрацию трафика у upstream game-proxy и его лимиты.
+# D) Флуд со спуфленных адресов (много уникальных источников, SYN-throttle не
+#    помогает) → RST-challenge в XDP. Работает для любого TCP-протокола, включая
+#    Minecraft (PoW для Minecraft не включай: он несовместим с протоколом):
+#      [xdp] syn_challenge_enabled = true
+#            challenge_secret_hex  = "<openssl rand -hex 8>"
+#    затем systemctl restart rampart. Живой клиент теряет ~10–20 мс на первый
+#    connect (один RST и ретрансмит SYN), спуф не проходит. См. §2 метрики challenge.
 
 # ── ШАГ 4: Если не помогает ──
 
@@ -72,6 +77,8 @@ clickhouse-client --query "SELECT count() FROM rampart_events WHERE event_type='
 |---------------|-----------|------------|
 | `rampart_connections_total{result="overloaded"}` | исчерпан глобальный бюджет соединений (4×workers×max_connections_per_ip) | проверить, не атака ли; при легитимной нагрузке — поднять `max_connections_per_ip`/`workers.count` |
 | `rampart_xdp_dropped` растёт, `rampart_xdp_passed` — нет | XDP дропает всё | проверить `protected_port_start/end`, баны и счётчики `stats_map` (список — [architecture.md](architecture.md) §6); смотреть через `bpftool` |
+| `rampart_xdp_challenge_sent` растёт, `rampart_xdp_challenge_verified` стоит | challenge отвечает на SYN, но никто не проходит: либо это чистый спуф-флуд (норма), либо легитимные клиенты не доходят | `curl` к порту с внешнего хоста: если не открывается — проверить, что SYN-ACK уходит с NIC (`tcpdump -ni <if> 'tcp[13]=18'`) и что upstream не режет пакеты с неверным ack |
+| `rampart_xdp_challenge_failed` растёт | RST по pending-flow с неверным seq или после `challenge_timeout_ms` | единичные — норма (поздние RST); лавина — кто-то подбирает challenge, источник смотреть в `tcpdump` |
 | `rampart_clickhouse_dropped_total` > 0 | события не успевают уходить в ClickHouse | проверить доступность/латентность ClickHouse; события потеряны, защита работает |
 | `rampart_xdp_whitelist` растёт | трафик от whitelist-адресов | норма, но если это неожиданно — проверить `whitelist` в конфиге |
 | лог `global connection budget exhausted` | то же, что `overloaded` | см. выше |

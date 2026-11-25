@@ -51,7 +51,7 @@ Stateless-фильтр на входе интерфейса. Разбирает 
 | Blacklist LPM (`/32`, `/128`, префиксы) | да | да |
 | Whitelist LPM | да | да |
 | TCP conntrack, SYN-throttle | да | нет |
-| RST-challenge (liveness proof) | да | нет |
+| RST-challenge (liveness proof) | да | да |
 | UDP policy: pass/drop/rate-limit | да | да |
 | Prefix-статистика (`/24`, `/64`) | да | да |
 | Ringbuf-события | да | нет (только счётчики) |
@@ -64,6 +64,8 @@ NAT-роутеры и любой stateful-фаервол помечают SYN-AC
 RST с правильным seq помечает источник verified (TTL 5 мин, скользящий); ретрансмит SYN
 клиента (Linux — через ~10 мс) уходит на backend. Любой другой RST по pending-flow стирает
 challenge и считается `challenge_failed`, поэтому у спуфера одна попытка угадать k на SYN.
+Нативный IPv6 использует свои карты `challenge_pending6`/`challenge_verified6` со 128-битными
+ключами; счётчики `challenge_*` общие для обоих семейств.
 
 Карты (`xdp/core/maps.h`): `blacklist_map`, `blacklist6_map`, `whitelist_map`,
 `whitelist6_map`, `connection_map`, `throttle_map`, `prefix_stats`, `stats_map`,

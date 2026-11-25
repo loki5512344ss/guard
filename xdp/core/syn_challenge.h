@@ -230,37 +230,69 @@ static __always_inline void chal_build_synack(struct xdp_md *ctx,
 }
 
 /**
- * Handle a bare SYN from a source that may not have proven liveness yet.
+ * Derive the challenge values for a native IPv6 flow.
+ *
+ * Same contract as chal_derive(), over the full 128-bit addresses.
+ *
+ * @param k    IPv6 flow key of the connection being challenged
+ * @param isn  client ISN from the SYN (host order)
+ * @return     64-bit secret-derived value (high half ISN, low half offset)
+ */
+static __always_inline __u64 chal_derive6(const struct flow_key6 *k, __u32 isn)
+{
+    __u64 w[4];
+    __builtin_memcpy(w, k->src, 16);
+    __builtin_memcpy(&w[2], k->dst, 16);
+    __u64 h = (__u64)G_CHALLENGE_SECRET ^ 0x5253544348414C36ULL;
+    h = chal_mix64(h, w[0]);
+    h = chal_mix64(h, w[1]);
+    h = chal_mix64(h, w[2]);
+    h = chal_mix64(h, w[3]);
+    h = chal_mix64(h, ((__u64)k->src_port << 48) | ((__u64)k->dst_port << 32) | isn);
+    h *= 0xFF51AFD7ED558CCDULL;
+    h ^= h >> 32;
+    return h;
+}
+
+/**
+ * Shared SYN handling for both address families.
  *
  * A verified source refreshes its TTL and continues down the normal filter
- * path. Anything else receives the reflected challenge.
+ * path. Anything else receives the reflected challenge. The maps are passed
+ * in so the IPv4 and IPv6 tables share one implementation; the function is
+ * always inlined, so the verifier still sees constant map pointers.
  *
- * @param ctx      XDP context
- * @param eth      Ethernet header
- * @param l3       start of the IPv4 or IPv6 header
- * @param is_ipv6  1 when l3 is an IPv6 header
- * @param tcp      TCP header
- * @param flow     flow key of this connection
- * @param now      current bpf_ktime_get_ns() timestamp
- * @return         CHAL_CONTINUE to process normally, XDP_TX when a challenge
- *                 was sent, or XDP_DROP on failure
+ * @param ctx       XDP context
+ * @param eth       Ethernet header
+ * @param l3        start of the IPv4 or IPv6 header
+ * @param is_ipv6   1 when l3 is an IPv6 header
+ * @param tcp       TCP header
+ * @param verified  challenge_verified or challenge_verified6
+ * @param vkey      source address key for @verified
+ * @param pending   challenge_pending or challenge_pending6
+ * @param pkey      flow key for @pending
+ * @param h         chal_derive()/chal_derive6() value for this SYN
+ * @param now       current bpf_ktime_get_ns() timestamp
+ * @return          CHAL_CONTINUE to process normally, XDP_TX when a challenge
+ *                  was sent, or XDP_DROP on failure
  */
-static __always_inline int chal_on_syn(struct xdp_md *ctx, struct ethhdr *eth,
-                                       void *l3, __u8 is_ipv6,
-                                       struct tcphdr *tcp,
-                                       const struct flow_key *flow, __u64 now)
+static __always_inline int chal_syn_common(struct xdp_md *ctx, struct ethhdr *eth,
+                                           void *l3, __u8 is_ipv6,
+                                           struct tcphdr *tcp,
+                                           void *verified, const void *vkey,
+                                           void *pending, const void *pkey,
+                                           __u64 h, __u64 now)
 {
-    __u64 *v = bpf_map_lookup_elem(&challenge_verified, &flow->src_ip);
+    __u64 *v = bpf_map_lookup_elem(verified, vkey);
     if (v) {
         if (now - *v <= G_CHALLENGE_VERIFIED_TTL_NS) {
             *v = now; // sliding TTL refresh
             return CHAL_CONTINUE;
         }
-        bpf_map_delete_elem(&challenge_verified, &flow->src_ip); // expired
+        bpf_map_delete_elem(verified, vkey); // expired
     }
 
     __u32 isn = bpf_ntohl(tcp->seq);
-    __u64 h = chal_derive(flow, isn);
     __u32 marker = (__u32)(h >> 32);  // our ISN
     // Bogus ack ISS+1-k with k in [1, CHAL_ACK_SPAN]: never acceptable
     // (SEG.ACK <= ISS) yet inside the conntrack window (see file header).
@@ -271,7 +303,7 @@ static __always_inline int chal_on_syn(struct xdp_md *ctx, struct ethhdr *eth,
         .marker = marker,
         .bad_ack = bad_ack,
     };
-    if (bpf_map_update_elem(&challenge_pending, flow, &p, BPF_ANY)) {
+    if (bpf_map_update_elem(pending, pkey, &p, BPF_ANY)) {
         inc_drop(); // cannot track the challenge — fail closed
         return XDP_DROP;
     }
@@ -282,21 +314,26 @@ static __always_inline int chal_on_syn(struct xdp_md *ctx, struct ethhdr *eth,
 }
 
 /**
- * Handle a RST that may answer a pending challenge.
+ * Shared RST handling for both address families.
  *
  * Only a RST echoing a secret-derived value counts as proof of life: our bad
  * ack as its seq, or our marker+1 as its ack. Everything else, including a
  * reply that arrives after the timeout, fails the challenge and is dropped.
  *
- * @param tcp   TCP header of the RST
- * @param flow  flow key of the connection
- * @param now   current bpf_ktime_get_ns() timestamp
- * @return      CHAL_CONTINUE when no challenge was pending, otherwise XDP_DROP
+ * @param tcp       TCP header of the RST
+ * @param verified  challenge_verified or challenge_verified6
+ * @param vkey      source address key for @verified
+ * @param pending   challenge_pending or challenge_pending6
+ * @param pkey      flow key for @pending
+ * @param now       current bpf_ktime_get_ns() timestamp
+ * @return          CHAL_CONTINUE when no challenge was pending, otherwise XDP_DROP
  */
-static __always_inline int chal_on_rst(struct tcphdr *tcp,
-                                       const struct flow_key *flow, __u64 now)
+static __always_inline int chal_rst_common(struct tcphdr *tcp,
+                                           void *verified, const void *vkey,
+                                           void *pending, const void *pkey,
+                                           __u64 now)
 {
-    struct challenge_pending *p = bpf_map_lookup_elem(&challenge_pending, flow);
+    struct challenge_pending *p = bpf_map_lookup_elem(pending, pkey);
     if (!p)
         return CHAL_CONTINUE;
 
@@ -309,7 +346,7 @@ static __always_inline int chal_on_rst(struct tcphdr *tcp,
 
     // Copy every field needed before deleting: an LRU element may be freed
     // as soon as it is removed, so p must never be dereferenced afterwards.
-    bpf_map_delete_elem(&challenge_pending, flow);
+    bpf_map_delete_elem(pending, pkey);
 
     if (!ok || now - sent_at > timeout_ns) {
         inc_chal_failed();
@@ -317,9 +354,62 @@ static __always_inline int chal_on_rst(struct tcphdr *tcp,
     }
 
     __u64 seen = now;
-    bpf_map_update_elem(&challenge_verified, &flow->src_ip, &seen, BPF_ANY);
+    bpf_map_update_elem(verified, vkey, &seen, BPF_ANY);
     inc_chal_verified();
-    return XDP_DROP; // client app will retry connect; next SYN passes
+    return XDP_DROP; // the client's SYN retransmit passes next
+}
+
+/**
+ * IPv4 (and IPv4-mapped IPv6) SYN: see chal_syn_common().
+ *
+ * @param flow  32-bit flow key of this connection
+ */
+static __always_inline int chal_on_syn(struct xdp_md *ctx, struct ethhdr *eth,
+                                       void *l3, __u8 is_ipv6,
+                                       struct tcphdr *tcp,
+                                       const struct flow_key *flow, __u64 now)
+{
+    __u64 h = chal_derive(flow, bpf_ntohl(tcp->seq));
+    return chal_syn_common(ctx, eth, l3, is_ipv6, tcp,
+                           &challenge_verified, &flow->src_ip,
+                           &challenge_pending, flow, h, now);
+}
+
+/**
+ * IPv4 (and IPv4-mapped IPv6) RST: see chal_rst_common().
+ */
+static __always_inline int chal_on_rst(struct tcphdr *tcp,
+                                       const struct flow_key *flow, __u64 now)
+{
+    return chal_rst_common(tcp, &challenge_verified, &flow->src_ip,
+                           &challenge_pending, flow, now);
+}
+
+/**
+ * Native IPv6 SYN: see chal_syn_common(). The caller guarantees that the
+ * TCP header directly follows the fixed IPv6 header (no extension headers),
+ * because the reply is rebuilt as a bare 40+20-byte packet.
+ *
+ * @param flow6  128-bit flow key of this connection
+ */
+static __always_inline int chal6_on_syn(struct xdp_md *ctx, struct ethhdr *eth,
+                                        struct ipv6hdr *ip6, struct tcphdr *tcp,
+                                        const struct flow_key6 *flow6, __u64 now)
+{
+    __u64 h = chal_derive6(flow6, bpf_ntohl(tcp->seq));
+    return chal_syn_common(ctx, eth, ip6, 1, tcp,
+                           &challenge_verified6, flow6->src,
+                           &challenge_pending6, flow6, h, now);
+}
+
+/**
+ * Native IPv6 RST: see chal_rst_common().
+ */
+static __always_inline int chal6_on_rst(struct tcphdr *tcp,
+                                        const struct flow_key6 *flow6, __u64 now)
+{
+    return chal_rst_common(tcp, &challenge_verified6, flow6->src,
+                           &challenge_pending6, flow6, now);
 }
 
 #endif /* RAMPART_SYN_CHALLENGE_H */

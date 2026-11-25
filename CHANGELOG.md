@@ -12,6 +12,12 @@
 - `scripts/xdp_challenge_test.sh` и фаза `chal` в `xdp_ci.sh`: живой клиент за conntrack
   INVALID DROP проходит, повторное соединение без нового challenge, спуф не верифицируется,
   поддельный RST засчитывается как failed. На старом коде фаза падает.
+- XDP: RST-challenge для нативного IPv6 — карты `challenge_pending6`/`challenge_verified6`
+  со 128-битными ключами, общая с IPv4 логика SYN/RST. SYN за IPv6 extension-заголовками (и
+  IPv4-mapped IPv6 с ними) при включённом challenge дропается, как IPv4 с опциями.
+  `xdp_challenge_test.sh` проверяет v6: живой клиент за ip6tables INVALID DROP, спуф, forged RST.
+- Документация: матрица «протокол → PoW / RST-challenge» в configuration.md, раздел про
+  challenge и его метрики в runbook. Ошибка `pow.enabled` + Minecraft подсказывает RST-challenge.
 - Minecraft: строгий автомат handshake→login/status (дубли handshake/login-start, login до
   handshake, плохой hostname/next_state/версия/ник → тихое закрытие); лимиты кадра по фазе до
   буферизации (handshake 2048, login-start 5120, status request 64, настраиваются в

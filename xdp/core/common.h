@@ -68,6 +68,17 @@ struct flow_key {
 };
 
 /**
+ * Native IPv6 flow key: full 128-bit addresses plus ports, network order.
+ */
+struct flow_key6 {
+    __u8  src[16];
+    __u8  dst[16];
+    __u16 src_port;
+    __u16 dst_port;
+};
+_Static_assert(sizeof(struct flow_key6) == 36, "flow_key6 size");
+
+/**
  * Connection tracking entry.
  *
  * LRU maps evict stale entries automatically when full; RST/FIN removes

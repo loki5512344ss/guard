@@ -290,3 +290,19 @@ fn rejects_zero_workers() {
 	let err = Config::parse_str("[workers]\ncount = 0\n").expect_err("zero workers must be rejected");
 	assert!(err.to_string().contains("workers.count"));
 }
+
+/// Minecraft clients cannot answer the text PoW, so only the protocol-agnostic
+/// RST challenge may guard a Minecraft edge.
+#[cfg(feature = "protocol-minecraft")]
+#[test]
+fn minecraft_rejects_pow_but_accepts_rst_challenge() {
+	let base = "[protocol.minecraft]\nenabled = true\n";
+	let err =
+		Config::parse_str(&format!("{base}[pow]\nenabled = true\n")).expect_err("PoW + Minecraft must be rejected");
+	assert!(err.to_string().contains("xdp.syn_challenge_enabled"), "{err}");
+	let config = Config::parse_str(&format!(
+		"{base}[xdp]\nsyn_challenge_enabled = true\nchallenge_secret_hex = \"0011223344556677\"\n"
+	))
+	.expect("RST challenge + Minecraft must be accepted");
+	assert!(config.xdp.syn_challenge_enabled && !config.pow.enabled);
+}

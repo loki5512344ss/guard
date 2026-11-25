@@ -157,6 +157,24 @@ struct {
 } challenge_pending SEC(".maps");
 
 /**
+ * Native IPv6 counterparts of challenge_verified / challenge_pending: same
+ * value contract, 128-bit keys so no two v6 hosts ever share a slot.
+ */
+struct {
+    __uint(type, BPF_MAP_TYPE_LRU_HASH);
+    __uint(max_entries, 65536);
+    __type(key, struct in6_addr);   // src6
+    __type(value, __u64);           // last_seen (ktime_ns)
+} challenge_verified6 SEC(".maps");
+
+struct {
+    __uint(type, BPF_MAP_TYPE_LRU_HASH);
+    __uint(max_entries, 16384);
+    __type(key, struct flow_key6);
+    __type(value, struct challenge_pending);
+} challenge_pending6 SEC(".maps");
+
+/**
  * Statistics counters, indexed by the STAT_* constants below.
  *
  * Per-CPU array: increments need no atomics between CPUs, userspace sums the
