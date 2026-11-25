@@ -89,12 +89,18 @@ SOURCES=random sudo -E ...   # спуфленные источники: защи
 Печатает pps, дропы XDP, RST-challenge, загрузку CPU и долю успешных запросов
 легитимного клиента во время флуда.
 
+RST-challenge отдельно проверяет `scripts/xdp_challenge_test.sh`: клиент в своём netns за
+`ctstate INVALID DROP` (как `ufw` или NAT-роутер) должен пройти challenge с первого connect,
+спуфленные SYN не верифицируются, поддельный RST засчитывается как `challenge_failed`.
+veth отдаёт кадры `XDP_TX` пиру только если на пире висит native XDP-программа, поэтому
+challenge-тест и `xdp_stress.sh` вешают на клиентский конец pass-программу (нужен `clang`);
+на реальной NIC это не требуется.
+
 Известные пробелы: `xdp_ipv6_smoke.sh` на ядре 5.15 не проходит (патч `.rodata` из
-bpftool и NDP в стенде); в режиме `SOURCES=random` живой клиент пока не проходит
-RST-challenge — это работа v0.5. Если `bpftool` на хосте — обёртка без пакета под
+bpftool и NDP в стенде). Если `bpftool` на хосте — обёртка без пакета под
 текущее ядро (Ubuntu), подставьте реальный бинарь из `/usr/lib/linux-tools-*/`.
 
-Единая точка входа: `sudo -E bash scripts/xdp_ci.sh` (`BIN=…` — пропустить сборку,
+Единая точка входа: `sudo -E bash scripts/xdp_ci.sh` (фазы `pkt`, `smoke`, `chal`; `BIN=…` — пропустить сборку,
 `--require` — SKIP считать ошибкой, `--with-ipv6` — добавить `xdp_ipv6_smoke.sh`). Скрипт
 печатает строки `RESULT <фаза> PASS|FAIL|SKIP`; без root, netns, ядра ≥ 5.10 или рабочего
 `bpftool` он честно пишет `SKIP: <причина>`, а не зелёный результат. В CI это job

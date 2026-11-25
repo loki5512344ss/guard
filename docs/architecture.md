@@ -56,6 +56,15 @@ Stateless-фильтр на входе интерфейса. Разбирает 
 | Prefix-статистика (`/24`, `/64`) | да | да |
 | Ringbuf-события | да | нет (только счётчики) |
 
+RST-challenge (`xdp/core/syn_challenge.h`): на SYN от неверифицированного источника XDP
+отвечает SYN-ACK с заведомо неприемлемым ack и дропает SYN. Ack = `ISS+1−k`, где
+`1 ≤ k ≤ 2^15` выводится из секрета, ISN клиента и 4-tuple: он ниже `ISS+1`, поэтому TCP-стек
+клиента отвечает RST с `seq = ack`, но остаётся в окне conntrack клиента — иначе `ufw`,
+NAT-роутеры и любой stateful-фаервол помечают SYN-ACK как INVALID и challenge не доходит.
+RST с правильным seq помечает источник verified (TTL 5 мин, скользящий); ретрансмит SYN
+клиента (Linux — через ~10 мс) уходит на backend. Любой другой RST по pending-flow стирает
+challenge и считается `challenge_failed`, поэтому у спуфера одна попытка угадать k на SYN.
+
 Карты (`xdp/core/maps.h`): `blacklist_map`, `blacklist6_map`, `whitelist_map`,
 `whitelist6_map`, `connection_map`, `throttle_map`, `prefix_stats`, `stats_map`,
 `events_ringbuf`, `syn_challenge`-карты. Значение бана — монотонное время

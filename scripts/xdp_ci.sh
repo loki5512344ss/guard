@@ -8,6 +8,7 @@
 # Phases (each prints one machine-readable line `RESULT <name> PASS|FAIL|SKIP`):
 #   pkt    scripts/xdp_pkt_test.sh      VLAN/QinQ, fragments, Ethernet padding
 #   smoke  scripts/xdp_netns_smoke.sh   verifier, attach, proxy, ban, expiry, detach
+#   chal   scripts/xdp_challenge_test.sh RST-challenge: live client behind conntrack, spoof, forged RST
 #   ipv6   scripts/xdp_ipv6_smoke.sh    opt-in via --with-ipv6 (known gaps, see docs/testing.md)
 #
 # Exit codes: 0 all passed (or honestly skipped), 1 a phase failed,
@@ -91,6 +92,7 @@ run_phase() {
 
 run_phase pkt scripts/xdp_pkt_test.sh
 run_phase smoke scripts/xdp_netns_smoke.sh
+run_phase chal scripts/xdp_challenge_test.sh
 [ "$WITH_IPV6" = 1 ] && run_phase ipv6 scripts/xdp_ipv6_smoke.sh
 
 if [ "$FAILED" = 0 ]; then

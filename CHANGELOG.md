@@ -9,6 +9,9 @@
 
 ### Added
 
+- `scripts/xdp_challenge_test.sh` и фаза `chal` в `xdp_ci.sh`: живой клиент за conntrack
+  INVALID DROP проходит, повторное соединение без нового challenge, спуф не верифицируется,
+  поддельный RST засчитывается как failed. На старом коде фаза падает.
 - Minecraft: строгий автомат handshake→login/status (дубли handshake/login-start, login до
   handshake, плохой hostname/next_state/версия/ник → тихое закрытие); лимиты кадра по фазе до
   буферизации (handshake 2048, login-start 5120, status request 64, настраиваются в
@@ -54,6 +57,14 @@
 
 ### Fixed
 
+- XDP RST-challenge не пропускал живых клиентов за stateful-фаерволом (`ufw`, NAT-роутер,
+  любой conntrack с `ct state invalid drop`): ack challenge-SYN-ACK брался из всего 32-битного
+  пространства, conntrack клиента помечал такой SYN-ACK как INVALID и выбрасывал до TCP-стека.
+  Теперь ack = `ISS+1−k` (`1 ≤ k ≤ 2^15`, из секрета и ISN клиента) — внутри окна conntrack,
+  но по-прежнему неприемлем для TCP (`SEG.ACK ≤ ISS`). Живой клиент проходит за ~15 мс.
+- Стенды XDP на veth теряли challenge-SYN-ACK: `XDP_TX` на veth доходит до пира, только если
+  у пира native XDP-программа. `xdp_stress.sh` и новый тест вешают pass-программу на пира;
+  WARN «известный пробел» в `xdp_stress.sh SOURCES=random` заменён на проверку verified.
 - **XDP: бан и whitelist для IPv4-mapped IPv6 CIDR не работали** (`::ffff:a.b.c.d/N` попадал
   в IPv6-trie, где IPv4-пакет его не находил). Теперь `canonical_cidr` сворачивает такие
   префиксы в IPv4; userspace-таблица CIDR делает то же, маски через `checked_shl`.

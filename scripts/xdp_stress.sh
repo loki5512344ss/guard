@@ -56,6 +56,16 @@ ip link set rstap netns "$NS"
 ip addr add "$HOST_IP/24" dev rsh0
 ip addr add "$LEGIT_IP/24" dev rsh0
 ip link set rsh0 up
+# veth hands XDP_TX frames (the RST-challenge SYN-ACK) to the peer only when the
+# peer runs a native XDP program; attach a pass-through one (a real NIC needs none).
+printf '%s\n' '__attribute__((section("xdp"), used)) int xdp_pass(void *ctx) { return 2; }' \
+    'char _license[] __attribute__((section("license"), used)) = "GPL";' > "$WORK/xdp_pass.c"
+if clang -O2 -target bpf -c "$WORK/xdp_pass.c" -o "$WORK/xdp_pass.o" 2>/dev/null \
+    && ip link set dev rsh0 xdp obj "$WORK/xdp_pass.o" sec xdp; then
+    :
+elif [ "$CHALLENGE" = true ]; then
+    echo "нужен clang для XDP pass на rsh0 (иначе challenge SYN-ACK теряется в veth)"; exit 2
+fi
 ip -n "$NS" addr add "$EDGE_IP/24" dev rstap
 ip -n "$NS" link set rstap up
 ip -n "$NS" link set lo up
@@ -155,15 +165,13 @@ echo "легитимный клиент: $OK_CNT/$ALL_CNT успешно, худ
 [ "$TOTAL" -gt 0 ] && ok "XDP видел флуд" || fail "XDP не обработал ни одного пакета"
 if [ "$SOURCES" = random ]; then
     [ "$CHALLENGES" -gt 0 ] && ok "флуд отвечается RST-challenge ($CHALLENGES)" || fail "challenge не сработал"
+    # The baseline request already verified the client, before the V0 snapshot.
+    [ "${V1:-0}" -ge 1 ] && ok "живой клиент верифицирован (всего $V1)" || fail "ни один живой клиент не прошёл challenge"
 else
     [ "$DROPPED" -gt 0 ] && ok "флуд дропается в XDP" || fail "XDP ничего не дропнул"
 fi
 if [ "$ALL_CNT" -gt 0 ] && [ $((OK_CNT * 10)) -ge $((ALL_CNT * 8)) ]; then
     ok "легитимный клиент обслуживается под флудом (>=80%)"
-elif [ "$SOURCES" = random ]; then
-    # Known gap, tracked in docs/roadmap/v0.5-rst-challenge-ga.md: with the RST
-    # challenge on, a real client is not yet verified even without a flood.
-    echo "WARN: легитимный клиент не прошёл RST-challenge ($OK_CNT/$ALL_CNT) — известный пробел v0.5"
 else
     fail "легитимный клиент деградировал ($OK_CNT/$ALL_CNT)"
 fi

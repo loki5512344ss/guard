@@ -53,7 +53,7 @@
 
 | Задача | Приоритет | Статус | План |
 |--------|-----------|--------|------|
-| RST-challenge: довести до GA | P0 | planned | [v0.5-rst-challenge-ga.md](v0.5-rst-challenge-ga.md) |
+| RST-challenge: довести до GA | P0 | in-progress | [v0.5-rst-challenge-ga.md](v0.5-rst-challenge-ga.md) |
 | Pinned maps + OpenAPI | P1 | idea | [v0.5-pinned-maps-openapi.md](v0.5-pinned-maps-openapi.md) |
 | GeoIP/ASN reputation | P1 | idea | [v0.5-geoip-asn.md](v0.5-geoip-asn.md) |
 | gRPC protocol plugin | P2 | idea | [v0.5-grpc-plugin.md](v0.5-grpc-plugin.md) |

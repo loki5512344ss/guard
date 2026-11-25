@@ -13,9 +13,18 @@
  *   2. A spoofed source never reacts, because it does not own the address.
  *   3. A live client's TCP stack rejects the unacceptable SYN-ACK
  *      (RFC 9293 SYN-SENT: a SEG.ACK outside [ISS+1, SND.NXT] triggers a
- *      RST) and echoes secret-derived values in that RST. Seeing the RST
- *      marks the source verified; the application reconnects and its next
- *      SYN reaches the backend.
+ *      RST with SEQ=SEG.ACK) and so echoes the secret-derived ack. Seeing
+ *      the RST marks the source verified; the client's SYN retransmit (or
+ *      the application's reconnect) then reaches the backend.
+ *
+ * The bogus ack sits just BELOW the client's ISS+1 (ISS+1-k, 1 <= k <= 2^15)
+ * instead of anywhere in the 32-bit space. Linux conntrack on the client
+ * side (ufw, NAT routers, any stateful firewall) marks a SYN-ACK whose ack is
+ * outside its ~64 KiB window as INVALID, and "ct state invalid drop" or a
+ * failed NAT reverse lookup then eats the challenge before the client stack
+ * sees it. An ack within the window passes conntrack, yet is still
+ * unacceptable to the TCP state machine (SEG.ACK <= ISS), so the RST is
+ * still generated, and the RST seq lands inside the window as well.
  *
  * Pending challenges expire after G_CHALLENGE_TIMEOUT_MS, so a silent
  * spoofed source is forgotten instead of accumulating state.
@@ -27,6 +36,11 @@
 #include "stats.h"
 
 #define CHAL_CONTINUE (-1) // fall through to the normal filter path
+
+// Range of the bogus-ack offset below the client's ISS+1. Must stay a power
+// of two and well under the 65535-byte window the challenge SYN-ACK
+// advertises, or client-side conntrack drops the challenge or the RST.
+#define CHAL_ACK_SPAN 0x8000U
 
 /**
  * Secret-dependent 64-bit mixing step (splitmix-style finalizer).
@@ -46,18 +60,21 @@ static __always_inline __u64 chal_mix64(__u64 h, __u64 v)
 /**
  * Derive the per-flow challenge values.
  *
- * Both the ISN and the bogus ack come from this hash, so forging a passing
- * RST is infeasible without G_CHALLENGE_SECRET while the values stay stable
- * for the same flow.
+ * Both our ISN and the bogus-ack offset come from this hash, so forging a
+ * passing RST requires G_CHALLENGE_SECRET. The client ISN is folded in, so a
+ * SYN retransmit gets the same challenge while a new connection attempt on
+ * the same 4-tuple gets a fresh one (a spoofer cannot enumerate the offset
+ * across attempts).
  *
- * @param k  flow key of the connection being challenged
- * @return   64-bit secret-derived value (high half ISN, low half bad ack)
+ * @param k    flow key of the connection being challenged
+ * @param isn  client ISN from the SYN (host order)
+ * @return     64-bit secret-derived value (high half ISN, low half offset)
  */
-static __always_inline __u64 chal_derive(const struct flow_key *k)
+static __always_inline __u64 chal_derive(const struct flow_key *k, __u32 isn)
 {
     __u64 h = (__u64)G_CHALLENGE_SECRET ^ 0x5253544348414C53ULL;
     h = chal_mix64(h, ((__u64)k->src_ip << 32) | k->dst_ip);
-    h = chal_mix64(h, ((__u64)k->src_port << 48) | ((__u64)k->dst_port << 32));
+    h = chal_mix64(h, ((__u64)k->src_port << 48) | ((__u64)k->dst_port << 32) | isn);
     h *= 0xFF51AFD7ED558CCDULL;
     h ^= h >> 32;
     return h;
@@ -242,13 +259,12 @@ static __always_inline int chal_on_syn(struct xdp_md *ctx, struct ethhdr *eth,
         bpf_map_delete_elem(&challenge_verified, &flow->src_ip); // expired
     }
 
-    __u64 h = chal_derive(flow);
+    __u32 isn = bpf_ntohl(tcp->seq);
+    __u64 h = chal_derive(flow, isn);
     __u32 marker = (__u32)(h >> 32);  // our ISN
-    __u32 bad_ack = (__u32)h;         // bogus ack the client must reject
-
-    __u32 expect = bpf_ntohl(tcp->seq) + 1;
-    if (bad_ack == expect) // ~2^-32 collision with a valid handshake — kill it
-        bad_ack = ~bad_ack;
+    // Bogus ack ISS+1-k with k in [1, CHAL_ACK_SPAN]: never acceptable
+    // (SEG.ACK <= ISS) yet inside the conntrack window (see file header).
+    __u32 bad_ack = isn + 1 - (1 + ((__u32)h & (CHAL_ACK_SPAN - 1)));
 
     struct challenge_pending p = {
         .sent_at = now,
