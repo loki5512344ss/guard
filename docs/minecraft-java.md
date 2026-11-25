@@ -82,7 +82,8 @@ username_charset = "standard"
   `bad_next_state`, `implausible_version`, `version_below_min`, `version_above_max`,
   `version_denied`, `bad_username`, `bad_status_request`, `timeout`, `io`.
 - `rampart_mc_protocol_version_total{version}` — имя релиза из встроенной таблицы
-  (например `1.20.3-4`), всё остальное — `other`.
+  (например `1.20.3-4`), всё остальное — `other`. Считается каждый разобранный handshake,
+  включая отклонённые политикой (`min/max_protocol_version`, `deny_protocol_versions`).
 
 Ограничения: второй login-start виден только если клиент прислал его сразу следом
 за первым; после ответа сервера трафик шифруется и не разбирается.

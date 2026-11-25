@@ -13,7 +13,7 @@ use crate::metrics;
 use crate::protocol::{HandshakeResult, ProtocolHandler, Upstream};
 use policy::{Policy, versions};
 use reason::Reason;
-use state::{Session, Step};
+use state::Session;
 use std::future::Future;
 use std::pin::Pin;
 use std::time::Duration;
@@ -43,11 +43,15 @@ impl MinecraftProtocolHandler {
 		// Handshake, then the status request or login-start that follows at once.
 		for _ in 0..2 {
 			let (frame, prefix_len) = read_frame(stream, session.frame_cap()).await?;
-			if let Step::Handshake(handshake) = session.feed(&frame[prefix_len..])? {
+			let step = session.feed(&frame[prefix_len..]);
+			// Count the version before the verdict: refused versions are the
+			// interesting ones on the dashboard.
+			if let Some(version) = session.take_parsed_version() {
 				metrics::MC_PROTOCOL_VERSION_TOTAL
-					.with_label_values(&[versions::label(handshake.protocol_version)])
+					.with_label_values(&[versions::label(version)])
 					.inc();
 			}
+			step?;
 			raw.extend_from_slice(&frame);
 		}
 		Ok(raw)

@@ -32,6 +32,8 @@ pub struct Session<'a> {
 	policy: &'a Policy,
 	phase: Phase,
 	started: Option<NextState>,
+	/// Protocol id of a parsed handshake, kept even when the policy refuses it.
+	parsed_version: Option<i32>,
 }
 
 impl<'a> Session<'a> {
@@ -41,7 +43,15 @@ impl<'a> Session<'a> {
 			policy,
 			phase: Phase::Handshake,
 			started: None,
+			parsed_version: None,
 		}
+	}
+
+	/// Takes the protocol id of the handshake parsed by the last [`Self::feed`],
+	/// whether the policy accepted it or not, so refused versions can be
+	/// counted too. Returns `None` once taken.
+	pub fn take_parsed_version(&mut self) -> Option<i32> {
+		self.parsed_version.take()
 	}
 
 	#[must_use]
@@ -79,6 +89,7 @@ impl<'a> Session<'a> {
 			Err(_) if parser::parse_login_start(body, self.policy).is_ok() => return Err(Reason::LoginBeforeHandshake),
 			Err(reason) => return Err(reason),
 		};
+		self.parsed_version = Some(handshake.protocol_version);
 		self.policy.check_version(handshake.protocol_version)?;
 		self.phase = match handshake.next_state {
 			NextState::Status => Phase::Status,

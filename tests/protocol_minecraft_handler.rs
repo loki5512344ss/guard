@@ -126,7 +126,8 @@ async fn denied_version_is_rejected_and_version_label_is_bounded() -> anyhow::Re
 	let other_before = MC_PROTOCOL_VERSION_TOTAL.with_label_values(&["other"]).get();
 	let mut unknown = handshake(31_337, "h", 2);
 	unknown.extend(login("Steve"));
-	assert!(run(&handler(|_| {}), &unknown).await.is_ok());
+	let accepted = run(&handler(|_| {}), &unknown).await;
+	assert!(accepted.is_ok(), "unknown version must pass: {accepted:?}");
 	assert!(MC_PROTOCOL_VERSION_TOTAL.with_label_values(&["other"]).get() > other_before);
 	Ok(())
 }

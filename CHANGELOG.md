@@ -65,6 +65,10 @@
 - Стенды XDP на veth теряли challenge-SYN-ACK: `XDP_TX` на veth доходит до пира, только если
   у пира native XDP-программа. `xdp_stress.sh` и новый тест вешают pass-программу на пира;
   WARN «известный пробел» в `xdp_stress.sh SOURCES=random` заменён на проверку verified.
+- Minecraft: `rampart_mc_protocol_version_total` не считал версии, отклонённые политикой
+  (deny/min/max), — метрика теряла именно те версии, которые режутся. Тест
+  `denied_version_is_rejected_and_version_label_is_bounded` проходил только при удачном
+  порядке параллельных тестов (на 2 CPU стабильно падал).
 - **XDP: бан и whitelist для IPv4-mapped IPv6 CIDR не работали** (`::ffff:a.b.c.d/N` попадал
   в IPv6-trie, где IPv4-пакет его не находил). Теперь `canonical_cidr` сворачивает такие
   префиксы в IPv4; userspace-таблица CIDR делает то же, маски через `checked_shl`.
